@@ -1,8 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders learn react link', () => {
+test('renders upload and save controls with canvas', () => {
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+
+  expect(screen.getAllByText(/upload image/i).length).toBeGreaterThan(0);
+  expect(screen.getByRole('button', { name: /save image/i })).toBeInTheDocument();
+  expect(document.getElementById('myCanvas')).toBeInTheDocument();
 });
