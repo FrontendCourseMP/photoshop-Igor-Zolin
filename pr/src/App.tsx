@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
 import { DecodedImage } from "./formats/gb7Decoder";
+import { EncodedImage } from "./formats/gb7Encoder";
 import { decodeGB7 } from "./formats/gb7Decoder";
+import { encodeGB7 } from "./formats/gb7Encoder";
 
 const CANVAS_WIDTH = 1500;
 const CANVAS_HEIGHT = 1000;
@@ -11,6 +13,14 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  type AppImage = {
+    width: number;
+    height: number;
+    data: Uint8ClampedArray;
+    hasMask?: boolean;
+  };
+  const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
+    
   const getContext = (): CanvasRenderingContext2D | null => {
     const canvas = canvasRef.current;
 
@@ -46,71 +56,80 @@ function App() {
   };
 
   const handleFileUpload = async (
-  event: React.ChangeEvent<HTMLInputElement>
-): Promise<void> => {
-  const file = event.target.files?.[0];
-  const canvas = canvasRef.current;
-  const context = getContext();
+    event: React.ChangeEvent<HTMLInputElement>
+  ): Promise<void> => {
+    const file = event.target.files?.[0];
+    const canvas = canvasRef.current;
+    const context = getContext();
 
-  if (!file || !canvas || !context) {
-    return;
-  }
+    if (!file || !canvas || !context) {
+      return;
+    }
 
-  const fileName = file.name.toLowerCase();
+    const fileName = file.name.toLowerCase();
 
-  if (fileName.endsWith(".gb7")) {
-    const buffer = await file.arrayBuffer();
+    if (fileName.endsWith(".gb7")) {
+      const buffer = await file.arrayBuffer();
 
-    const decoded = decodeGB7(buffer);
+      const decoded = decodeGB7(buffer);
 
-    canvas.width = decoded.width;
-    canvas.height = decoded.height;
+      canvas.width = decoded.width;
+      canvas.height = decoded.height;
 
-    const imageData = new ImageData(
-      new Uint8ClampedArray(decoded.data),
-      decoded.width,
-      decoded.height
-    );
-
-    context.putImageData(imageData, 0, 0);
-
-    return;
-  }
-
-  if (
-    file.type === "image/png" ||
-    file.type === "image/jpeg" ||
-    fileName.endsWith(".png") ||
-    fileName.endsWith(".jpg") ||
-    fileName.endsWith(".jpeg")
-  ) {
-    const imageUrl = URL.createObjectURL(file);
-    const image = new Image();
-
-    image.onload = (): void => {
-      const ratio = Math.min(
-        CANVAS_WIDTH / image.width,
-        CANVAS_HEIGHT / image.height
+      const imageData = new ImageData(
+        new Uint8ClampedArray(decoded.data),
+        decoded.width,
+        decoded.height
       );
 
-      const width = image.width * ratio;
-      const height = image.height * ratio;
-      const x = (CANVAS_WIDTH - width) / 2;
-      const y = (CANVAS_HEIGHT - height) / 2;
+      context.putImageData(imageData, 0, 0);
 
-      resetCanvasBackground(context);
-      context.drawImage(image, x, y, width, height);
+      setCurrentImage({
+        width: canvas.width,
+        height: canvas.height,
+        data: imageData.data,
+        hasMask: true,
+      });
+      
+      return;
+    }
 
-      URL.revokeObjectURL(imageUrl);
-    };
+    if (
+      file.type === "image/png" ||
+      file.type === "image/jpeg" ||
+      fileName.endsWith(".png") ||
+      fileName.endsWith(".jpg") ||
+      fileName.endsWith(".jpeg")
+    ) {
+      const imageUrl = URL.createObjectURL(file);
+      const image = new Image();
 
-    image.src = imageUrl;
+      image.onload = (): void => {
+        const ratio = Math.min(
+          CANVAS_WIDTH / image.width,
+          CANVAS_HEIGHT / image.height
+        );
 
-    return;
-  }
+        const width = image.width * ratio;
+        const height = image.height * ratio;
+        const x = (CANVAS_WIDTH - width) / 2;
+        const y = (CANVAS_HEIGHT - height) / 2;
 
-  alert("Неподдерживаемый формат файла");
-};
+        resetCanvasBackground(context);
+        context.drawImage(image, x, y, width, height);
+        
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+        URL.revokeObjectURL(imageUrl);
+      };
+
+      image.src = imageUrl;
+
+      return;
+    }
+
+    alert("Неподдерживаемый формат файла");
+  };
 
   const saveImage = (): void => {
     const canvas = canvasRef.current;
@@ -123,6 +142,65 @@ function App() {
     link.download = "edited_image.png";
     link.href = canvas.toDataURL("image/png");
     link.click();
+  };
+
+  const handleDownloadJPG = (): void => {
+    const canvas = canvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.download = "image.jpg";
+    link.href = canvas.toDataURL("image/jpeg", 0.92);
+    link.click();
+  };
+
+  const handleDownloadGB7 = (): void => {
+    if (!currentImage) {
+      alert("Сначала загрузите изображение");
+      return;
+    }
+
+    const buffer = encodeGB7(currentImage);
+
+    const blob = new Blob([buffer], {
+      type: "application/octet-stream",
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "image.gb7";
+    link.click();
+
+    const decoded = decodeGB7(buffer);
+
+    setCurrentImage({
+      width: decoded.width,
+      height: decoded.height,
+      data: decoded.data,
+      hasMask: decoded.hasMask,
+    });
+    URL.revokeObjectURL(url);
+  };
+
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+
+  const openDialog = (): void => {
+    dialogRef.current?.showModal();
+  };
+
+  const closeDialog = (): void => {
+    dialogRef.current?.close();
+  };
+
+  const handleDialogClick = (event: React.MouseEvent<HTMLDialogElement>): void => {
+    if (event.target === dialogRef.current) {
+      dialogRef.current?.close();
+    }
   };
 
   return (
@@ -155,15 +233,46 @@ function App() {
                     <button
                       className="Nav-buttons"
                       type="button"
-                      onClick={saveImage}
+                      onClick={openDialog}
                     >
-                      Сохранить изображение
+                      Экспортировать как...
                     </button>
                   </div>
                 </details>
               </li>
             </ul>
           </nav>
+
+          <dialog ref={dialogRef} onClick={handleDialogClick}>
+            <button
+              className="Nav-buttons"
+              type="button"
+              onClick={saveImage}
+            >
+              PNG
+            </button>
+            <button
+              className="Nav-buttons"
+              type="button"
+              onClick={handleDownloadGB7}
+            >
+              GB7
+            </button>
+            <button
+              className="Nav-buttons"
+              type="button"
+              onClick={handleDownloadJPG}
+            >
+              JPG
+            </button>
+            <button
+              className="Nav-buttons"
+              type="button"
+              onClick={closeDialog}
+            >
+              Закрыть
+            </button>
+          </dialog>
 
           <section className="Future-tools">
             <h3>Инструменты</h3>
