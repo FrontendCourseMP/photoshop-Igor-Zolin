@@ -60,6 +60,8 @@
 .Canvas-workspace {
   min-width: 0;
   display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .canvas-container {
@@ -77,6 +79,17 @@ canvas {
   max-width: 1500px;
   height: auto;
   background: #282c34;
+}
+
+.canvas-info {
+  border: 1px solid #454c59;
+  background: #20242d;
+  color: #d7deea;
+  font-size: 14px;
+  padding: 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
 }
 
 ul {
@@ -111,6 +124,17 @@ ul {
   display: none;
 }
 
+.Import-dialog {
+  border: 1px solid #5a6271;
+  background: #20242d;
+  color: white;
+  min-width: 280px;
+}
+
+.Import-dialog p {
+  margin: 0 0 8px;
+}
+
 @media (max-width: 768px) {
   .App-main {
     min-height: auto;
@@ -121,6 +145,11 @@ ul {
   .canvas-container {
     height: auto;
     max-height: 75vh;
+  }
+
+  .canvas-info {
+    flex-direction: column;
+    gap: 6px;
   }
 
   .Future-tools {
