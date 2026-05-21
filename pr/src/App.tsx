@@ -4,60 +4,32 @@ import { DecodedImage } from "./formats/gb7Decoder";
 import { EncodedImage } from "./formats/gb7Encoder";
 import { decodeGB7 } from "./formats/gb7Decoder";
 import { encodeGB7 } from "./formats/gb7Encoder";
-
-const CANVAS_WIDTH = 1500;
-const CANVAS_HEIGHT = 1000;
-const CANVAS_BG = "#282c34";
+import { CANVAS_BG, CANVAS_HEIGHT, CANVAS_WIDTH } from "./core/constants";
+import { LoadedImageInfo } from "./core/imageModel";
+import { detectImageColorDepthBits } from "./core/colorDepth";
+import {
+  createCanvasFromImageData,
+  drawPreviewToWorkspace,
+  resetCanvasBackground,
+  setCanvasResolution,
+} from "./canvas/canvasUtils";
+import { drawImageToCanvas } from "./canvas/drawImageToCanvas";
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
-  const [loadedImageInfo, setLoadedImageInfo] = useState<{
-    width: number;
-    height: number;
-    colorDepthBits: number;
-  } | null>(null);
+  const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
 
-  const hasAlphaChannel = (data: Uint8ClampedArray): boolean => {
-    for (let i = 3; i < data.length; i += 4) {
-      if (data[i] !== 255) {
-        return true;
-      }
-    }
-
-    return false;
-  };
-    
-  const getContext = (): CanvasRenderingContext2D | null => {
+  useEffect(() => {
     const canvas = canvasRef.current;
-
-    if (!canvas || process.env.NODE_ENV === "test") {
-      return null;
-    }
-
-    try {
-      return canvas.getContext("2d");
-    } catch {
-      return null;
-    }
-  };
-
-  const resetCanvasBackground = (
-    context: CanvasRenderingContext2D | null
-  ): void => {
-    if (!context) {
+    if (!canvas) {
       return;
     }
 
-    context.fillStyle = CANVAS_BG;
-    context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-  };
-
-  useEffect(() => {
-    const context = getContext();
-    resetCanvasBackground(context);
+    const context = setCanvasResolution(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
+    resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
   }, []);
 
   const handleUpload = (): void => {
@@ -69,27 +41,12 @@ function App() {
     if (!canvas) {
       return;
     }
-
-    canvas.width = decoded.width;
-    canvas.height = decoded.height;
-
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
-
-    const imageData = new ImageData(
-      new Uint8ClampedArray(decoded.data),
-      decoded.width,
-      decoded.height
-    );
-
-    context.putImageData(imageData, 0, 0);
+    drawImageToCanvas(canvas, decoded);
 
     setCurrentImage({
       width: decoded.width,
       height: decoded.height,
-      data: imageData.data,
+      data: new Uint8ClampedArray(decoded.data),
       hasMask: decoded.hasMask,
     });
     setLoadedImageInfo({
@@ -100,59 +57,40 @@ function App() {
   };
 
   const loadGb7AsRgba = (decoded: DecodedImage): void => {
+    const sourceCanvas = createCanvasFromImageData(
+      decoded.width,
+      decoded.height,
+      decoded.data
+    );
+    if (!sourceCanvas) {
+      return;
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) {
       return;
     }
 
-    canvas.width = CANVAS_WIDTH;
-    canvas.height = CANVAS_HEIGHT;
-
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
-
-    resetCanvasBackground(context);
-
-    const sourceCanvas = document.createElement("canvas");
-    sourceCanvas.width = decoded.width;
-    sourceCanvas.height = decoded.height;
-    const sourceContext = sourceCanvas.getContext("2d");
-    if (!sourceContext) {
-      return;
-    }
-
-    const sourceImageData = new ImageData(
-      new Uint8ClampedArray(decoded.data),
+    drawPreviewToWorkspace(
+      canvas,
+      sourceCanvas,
       decoded.width,
-      decoded.height
+      decoded.height,
+      CANVAS_WIDTH,
+      CANVAS_HEIGHT,
+      CANVAS_BG
     );
-    sourceContext.putImageData(sourceImageData, 0, 0);
-
-    const ratio = Math.min(
-      CANVAS_WIDTH / decoded.width,
-      CANVAS_HEIGHT / decoded.height
-    );
-    const width = decoded.width * ratio;
-    const height = decoded.height * ratio;
-    const x = (CANVAS_WIDTH - width) / 2;
-    const y = (CANVAS_HEIGHT - height) / 2;
-
-    context.drawImage(sourceCanvas, x, y, width, height);
-
-    const fullCanvasData = context.getImageData(0, 0, canvas.width, canvas.height);
 
     setCurrentImage({
-      width: canvas.width,
-      height: canvas.height,
-      data: fullCanvasData.data,
-      hasMask: hasAlphaChannel(fullCanvasData.data),
+      width: decoded.width,
+      height: decoded.height,
+      data: new Uint8ClampedArray(decoded.data),
+      hasMask: decoded.hasMask,
     });
     setLoadedImageInfo({
       width: decoded.width,
       height: decoded.height,
-      colorDepthBits: 32,
+      colorDepthBits: decoded.hasMask ? 32 : 24,
     });
   };
 
@@ -185,10 +123,7 @@ function App() {
     event: React.ChangeEvent<HTMLInputElement>
   ): Promise<void> => {
     const file = event.target.files?.[0];
-    const canvas = canvasRef.current;
-    const context = getContext();
-
-    if (!file || !canvas || !context) {
+    if (!file) {
       return;
     }
 
@@ -211,41 +146,57 @@ function App() {
       fileName.endsWith(".jpg") ||
       fileName.endsWith(".jpeg")
     ) {
+      const detectedColorDepthBits = await detectImageColorDepthBits(file, fileName);
       const imageUrl = URL.createObjectURL(file);
       const image = new Image();
 
       image.onload = (): void => {
-        const ratio = Math.min(
-          CANVAS_WIDTH / image.width,
-          CANVAS_HEIGHT / image.height
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = image.width;
+        sourceCanvas.height = image.height;
+        const sourceContext = sourceCanvas.getContext("2d");
+        if (!sourceContext) {
+          URL.revokeObjectURL(imageUrl);
+          return;
+        }
+
+        sourceContext.clearRect(0, 0, image.width, image.height);
+        sourceContext.drawImage(image, 0, 0);
+
+        const canvas = canvasRef.current;
+        if (!canvas) {
+          URL.revokeObjectURL(imageUrl);
+          return;
+        }
+
+        drawPreviewToWorkspace(
+          canvas,
+          sourceCanvas,
+          image.width,
+          image.height,
+          CANVAS_WIDTH,
+          CANVAS_HEIGHT,
+          CANVAS_BG
         );
 
-        const width = image.width * ratio;
-        const height = image.height * ratio;
-        const x = (CANVAS_WIDTH - width) / 2;
-        const y = (CANVAS_HEIGHT - height) / 2;
-
-        resetCanvasBackground(context);
-        context.drawImage(image, x, y, width, height);
-        const drawX = Math.max(0, Math.floor(x));
-        const drawY = Math.max(0, Math.floor(y));
-        const drawWidth = Math.max(1, Math.floor(width));
-        const drawHeight = Math.max(1, Math.floor(height));
-        const sampledData = context.getImageData(drawX, drawY, drawWidth, drawHeight);
-        const fullCanvasData = context.getImageData(0, 0, canvas.width, canvas.height);
+        const originalData = sourceContext.getImageData(
+          0,
+          0,
+          image.width,
+          image.height
+        );
         const isPng = file.type === "image/png" || fileName.endsWith(".png");
-        const hasAlpha = isPng && hasAlphaChannel(sampledData.data);
 
         setLoadedImageInfo({
           width: image.width,
           height: image.height,
-          colorDepthBits: hasAlpha ? 32 : 24,
+          colorDepthBits: detectedColorDepthBits,
         });
         setCurrentImage({
-          width: canvas.width,
-          height: canvas.height,
-          data: fullCanvasData.data,
-          hasMask: hasAlpha,
+          width: image.width,
+          height: image.height,
+          data: originalData.data,
+          hasMask: isPng,
         });
 
         URL.revokeObjectURL(imageUrl);
@@ -262,28 +213,55 @@ function App() {
   };
 
   const saveImage = (): void => {
-    const canvas = canvasRef.current;
+    if (!currentImage) {
+      return;
+    }
 
-    if (!canvas) {
+    const exportCanvas = createCanvasFromImageData(
+      currentImage.width,
+      currentImage.height,
+      currentImage.data
+    );
+    if (!exportCanvas) {
       return;
     }
 
     const link = document.createElement("a");
     link.download = "edited_image.png";
-    link.href = canvas.toDataURL("image/png");
+    link.href = exportCanvas.toDataURL("image/png");
     link.click();
   };
 
   const handleDownloadJPG = (): void => {
-    const canvas = canvasRef.current;
-
-    if (!canvas) {
+    if (!currentImage) {
       return;
     }
 
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = currentImage.width;
+    exportCanvas.height = currentImage.height;
+    const exportContext = exportCanvas.getContext("2d");
+    if (!exportContext) {
+      return;
+    }
+
+    exportContext.fillStyle = "#ffffff";
+    exportContext.fillRect(0, 0, currentImage.width, currentImage.height);
+
+    const sourceCanvas = createCanvasFromImageData(
+      currentImage.width,
+      currentImage.height,
+      currentImage.data
+    );
+    if (!sourceCanvas) {
+      return;
+    }
+
+    exportContext.drawImage(sourceCanvas, 0, 0);
+
     const link = document.createElement("a");
     link.download = "image.jpg";
-    link.href = canvas.toDataURL("image/jpeg", 0.92);
+    link.href = exportCanvas.toDataURL("image/jpeg", 0.92);
     link.click();
   };
 

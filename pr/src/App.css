@@ -1,12 +1,12 @@
 .App {
   background-color: #282c34;
-  min-height: 100vh;
+  min-height: 80vh;
   color: white;
   font-size: 16px;
 }
 
 .App-main {
-  min-height: 100vh;
+  min-height: 80vh;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 14px;
@@ -66,7 +66,7 @@
 
 .canvas-container {
   width: 100%;
-  height: calc(100vh - 28px);
+  height: calc(100vh - 70px);
   overflow: auto;
   background: #282c34;
   border: 1px solid #454c59;
