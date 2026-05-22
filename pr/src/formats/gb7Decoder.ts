@@ -1,4 +1,4 @@
-export type DecodeImage = {
+export type DecodedImage = {
     signature: number;
     version: number;
     flag: number;
@@ -10,9 +10,9 @@ export type DecodeImage = {
     data: Uint8ClampedArray;
 }
 
-export function decodeGB7(buffer: ArrayBuffer): DecodeImage {
+export function decodeGB7(buffer: ArrayBuffer): DecodedImage {
     const view = new DataView(buffer);
-    const signature = view.getUint32(0);
+    const signature = view.getUint32(0, false);
     const version = view.getUint8(4);
     const flag = view.getUint8(5);
     const width = view.getUint16(6, false);
@@ -24,13 +24,37 @@ export function decodeGB7(buffer: ArrayBuffer): DecodeImage {
 
     const rgba = new Uint8ClampedArray(width * height * 4);
 
+    if (buffer.byteLength < 12) {
+        throw new Error("Файл слишком маленький для GB7");
+    }
+
+    if (signature !== 0x4742371d) {
+        throw new Error("Некорректная сигнатура GB7");
+    }
+
+    if (version !== 1) {
+        throw new Error("Неподдерживаемая версия GB7");
+    }
+
+    if ((flag & 0b11111110) !== 0) {
+        throw new Error("Некорректные зарезервированные биты флага");
+    }
+
+    if (reserve !== 0) {
+        throw new Error("Некорректное значение reserve");
+    }
+
+    if (buffer.byteLength !== 12 + width * height) {
+        throw new Error("Размер файла не совпадает с width * height");
+    }
+
     for (let i = 0; i < pixels.length; i++) {
         const byte = pixels[i];
 
-        const gray7 = byte & 0x01111111;
-        const gray8 = (gray7 / 127) * 255;
+        const gray7 = byte & 0b01111111;
+        const gray8 = Math.round((gray7 / 127) * 255);
 
-        const maskBit = (byte & 0x10000000) >> 7;
+        const maskBit = (byte & 0b10000000) >> 7;
         const alpha = hasMask ? (maskBit ? 255 : 0) : 255;
         
         const offset = i * 4;

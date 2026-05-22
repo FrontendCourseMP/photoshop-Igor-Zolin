@@ -24,4 +24,4 @@ yarn-error.log*
 
 funcs.txt
 public/test-imgs/
-src/App.test.js
+src/App.test.tsx
