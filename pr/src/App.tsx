@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import "./App.css";
-import { DecodedImage } from "./formats/gb7Decoder";
-import { EncodedImage } from "./formats/gb7Encoder";
-import { decodeGB7 } from "./formats/gb7Decoder";
-import { encodeGB7 } from "./formats/gb7Encoder";
+import { DecodedImage, decodeGB7 } from "./formats/gb7Decoder";
+import { EncodedImage, encodeGB7 } from "./formats/gb7Encoder";
 import { CANVAS_BG, CANVAS_HEIGHT, CANVAS_WIDTH } from "./core/constants";
 import { LoadedImageInfo } from "./core/imageModel";
 import { detectImageColorDepthBits } from "./core/colorDepth";
@@ -351,7 +349,12 @@ function App() {
             </ul>
           </nav>
 
-          <dialog ref={dialogRef} onClick={handleDialogClick}>
+          <dialog
+            ref={dialogRef}
+            className="Export-dialog"
+            onClick={handleDialogClick}
+          >
+            <p>В каком формате сохранить изображение?</p>
             <button
               className="Nav-buttons"
               type="button"

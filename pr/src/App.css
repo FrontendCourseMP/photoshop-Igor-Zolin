@@ -135,6 +135,17 @@ ul {
   margin: 0 0 8px;
 }
 
+.Export-dialog {
+  border: 1px solid #5a6271;
+  background: #20242d;
+  color: white;
+  min-width: 280px;
+}
+
+.Export-dialog p {
+  margin: 0 0 8px;
+}
+
 @media (max-width: 768px) {
   .App-main {
     min-height: auto;
