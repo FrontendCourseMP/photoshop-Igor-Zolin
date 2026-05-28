@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import "./App.css";
 import { DecodedImage, decodeGB7 } from "./formats/gb7Decoder";
 import { EncodedImage, encodeGB7 } from "./formats/gb7Encoder";
@@ -19,9 +19,21 @@ import {
   createChannelThumbnail,
   DEFAULT_CHANNEL_VISIBILITY,
 } from "./canvas/channelPreview";
+import { rgbToCielab } from "./core/cielab";
 
 function App() {
   type CanvasViewMode = "workspace" | "native";
+  type ToolKey = "none" | "eyedropper";
+  type PickedPixel = {
+    x: number;
+    y: number;
+    r: number;
+    g: number;
+    b: number;
+    l: number;
+    labA: number;
+    labB: number;
+  };
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -37,6 +49,17 @@ function App() {
   const [channelThumbnails, setChannelThumbnails] = useState<
     Partial<Record<ChannelKey, string>>
   >({});
+  const [activeTool, setActiveTool] = useState<ToolKey>("none");
+  const [pickedPixel, setPickedPixel] = useState<PickedPixel | null>(null);
+
+  const hasTransparentPixels = (data: Uint8ClampedArray): boolean => {
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 255) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   const resetChannelsForImage = (
     alphaAvailable: boolean,
@@ -56,6 +79,19 @@ function App() {
     const context = setCanvasResolution(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
     resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
   }, []);
+
+  const visibleImageData = useMemo(() => {
+    if (!currentImage) {
+      return null;
+    }
+
+    return applyChannelVisibility(
+      currentImage.data,
+      channelVisibility,
+      hasAlphaChannel,
+      channelMode
+    );
+  }, [currentImage, channelVisibility, hasAlphaChannel, channelMode]);
 
   useEffect(() => {
     if (!currentImage) {
@@ -100,12 +136,10 @@ function App() {
       return;
     }
 
-    const visibleData = applyChannelVisibility(
-      currentImage.data,
-      channelVisibility,
-      hasAlphaChannel,
-      channelMode
-    );
+    const visibleData = visibleImageData;
+    if (!visibleData) {
+      return;
+    }
     const sourceCanvas = createCanvasFromImageData(
       currentImage.width,
       currentImage.height,
@@ -139,7 +173,7 @@ function App() {
       CANVAS_HEIGHT,
       CANVAS_BG
     );
-  }, [currentImage, channelVisibility, hasAlphaChannel, canvasViewMode, channelMode]);
+  }, [currentImage, canvasViewMode, visibleImageData]);
 
   const handleUpload = (): void => {
     fileInputRef.current?.click();
@@ -160,6 +194,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
+    setPickedPixel(null);
   };
 
   const loadGb7AsRgba = (decoded: DecodedImage): void => {
@@ -177,6 +212,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.hasMask ? 32 : 24,
     });
+    setPickedPixel(null);
   };
 
   const gb7ImportDialogRef = useRef<HTMLDialogElement | null>(null);
@@ -254,23 +290,35 @@ function App() {
           image.width,
           image.height
         );
+        const alphaInPixels = hasTransparentPixels(originalData.data);
+        const effectiveHasAlpha =
+          detectedColorInfo.hasAlphaChannel || alphaInPixels;
+        const effectiveColorDepth = effectiveHasAlpha
+          ? Math.max(detectedColorInfo.colorDepthBits, 32)
+          : detectedColorInfo.colorDepthBits;
 
         setCanvasViewMode("workspace");
-        resetChannelsForImage(detectedColorInfo.hasAlphaChannel, "rgb");
+        resetChannelsForImage(effectiveHasAlpha, "rgb");
 
         setLoadedImageInfo({
           width: image.width,
           height: image.height,
-          colorDepthBits: detectedColorInfo.colorDepthBits,
+          colorDepthBits: effectiveColorDepth,
         });
         setCurrentImage({
           width: image.width,
           height: image.height,
           data: originalData.data,
-          hasMask: detectedColorInfo.hasAlphaChannel,
+          hasMask: effectiveHasAlpha,
         });
+        setPickedPixel(null);
 
         URL.revokeObjectURL(imageUrl);
+      };
+
+      image.onerror = (): void => {
+        URL.revokeObjectURL(imageUrl);
+        alert("Не удалось загрузить изображение");
       };
 
       image.src = imageUrl;
@@ -365,6 +413,12 @@ function App() {
       data: decoded.data,
       hasMask: decoded.hasMask,
     });
+    setLoadedImageInfo({
+      width: decoded.width,
+      height: decoded.height,
+      colorDepthBits: decoded.colorDepth,
+    });
+    setPickedPixel(null);
     URL.revokeObjectURL(url);
   };
 
@@ -399,6 +453,89 @@ function App() {
       ...prev,
       [channel]: !prev[channel],
     }));
+  };
+
+  const getImagePointFromCanvasClick = (
+    event: React.MouseEvent<HTMLCanvasElement>
+  ): { x: number; y: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas || !currentImage) {
+      return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    const canvasX = (event.clientX - rect.left) * (canvas.width / rect.width);
+    const canvasY = (event.clientY - rect.top) * (canvas.height / rect.height);
+
+    if (canvasViewMode === "native") {
+      const x = Math.floor(canvasX);
+      const y = Math.floor(canvasY);
+      if (x < 0 || y < 0 || x >= currentImage.width || y >= currentImage.height) {
+        return null;
+      }
+      return { x, y };
+    }
+
+    const ratio = Math.min(
+      CANVAS_WIDTH / currentImage.width,
+      CANVAS_HEIGHT / currentImage.height
+    );
+    const drawWidth = currentImage.width * ratio;
+    const drawHeight = currentImage.height * ratio;
+    const offsetX = (CANVAS_WIDTH - drawWidth) / 2;
+    const offsetY = (CANVAS_HEIGHT - drawHeight) / 2;
+
+    if (
+      canvasX < offsetX ||
+      canvasY < offsetY ||
+      canvasX >= offsetX + drawWidth ||
+      canvasY >= offsetY + drawHeight
+    ) {
+      return null;
+    }
+
+    const x = Math.floor((canvasX - offsetX) / ratio);
+    const y = Math.floor((canvasY - offsetY) / ratio);
+
+    if (x < 0 || y < 0 || x >= currentImage.width || y >= currentImage.height) {
+      return null;
+    }
+
+    return { x, y };
+  };
+
+  const handleCanvasMouseDown = (
+    event: React.MouseEvent<HTMLCanvasElement>
+  ): void => {
+    if (activeTool !== "eyedropper" || event.button !== 0 || !currentImage || !visibleImageData) {
+      return;
+    }
+
+    const point = getImagePointFromCanvasClick(event);
+    if (!point) {
+      return;
+    }
+
+    const pixelIndex = (point.y * currentImage.width + point.x) * 4;
+    const r = visibleImageData[pixelIndex];
+    const g = visibleImageData[pixelIndex + 1];
+    const b = visibleImageData[pixelIndex + 2];
+    const lab = rgbToCielab(r, g, b);
+
+    setPickedPixel({
+      x: point.x,
+      y: point.y,
+      r,
+      g,
+      b,
+      l: lab.l,
+      labA: lab.a,
+      labB: lab.b,
+    });
   };
 
   return (
@@ -510,7 +647,30 @@ function App() {
           </dialog>
 
           <section className="Future-tools">
-            <h3>Инструменты</h3>
+            <div className="Tools-panel">
+              <h4>Инструменты</h4>
+              <div className="Tools-grid">
+                <button
+                  type="button"
+                  className={`Tool-tile ${activeTool === "eyedropper" ? "tool-active" : ""}`}
+                  onClick={() =>
+                    setActiveTool((prev) => (prev === "eyedropper" ? "none" : "eyedropper"))
+                  }
+                >
+                  Пипетка
+                </button>
+                <button type="button" className="Tool-tile Tool-tile-placeholder" disabled>
+                  Скоро
+                </button>
+                <button type="button" className="Tool-tile Tool-tile-placeholder" disabled>
+                  Скоро
+                </button>
+                <button type="button" className="Tool-tile Tool-tile-placeholder" disabled>
+                  Скоро
+                </button>
+              </div>
+            </div>
+
             <div className="Channels-panel">
               <h4>Каналы</h4>
               <div className="Channels-list">
@@ -569,6 +729,8 @@ function App() {
               width={CANVAS_WIDTH}
               height={CANVAS_HEIGHT}
               id="myCanvas"
+              onMouseDown={handleCanvasMouseDown}
+              className={activeTool === "eyedropper" ? "eyedropper-active" : ""}
             >
               Your browser does not support the HTML canvas tag.
             </canvas>
@@ -582,6 +744,12 @@ function App() {
               Разрешение:{" "}
               {loadedImageInfo
                 ? `${loadedImageInfo.width} x ${loadedImageInfo.height}`
+                : "—"}
+            </span>
+            <span>
+              Пипетка:{" "}
+              {pickedPixel
+                ? `X:${pickedPixel.x}, Y:${pickedPixel.y} | RGB(${pickedPixel.r}, ${pickedPixel.g}, ${pickedPixel.b}) | LAB(${pickedPixel.l.toFixed(2)}, ${pickedPixel.labA.toFixed(2)}, ${pickedPixel.labB.toFixed(2)})`
                 : "—"}
             </span>
           </div>

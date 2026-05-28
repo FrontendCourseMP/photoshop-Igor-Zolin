@@ -44,20 +44,49 @@ body {
   padding: 10px;
   border: 1px solid #5a6271;
   background: #20242d;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.Future-tools h3 {
-  margin: 0 0 10px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #cfd8e3;
-}
-
+.Tools-panel h4,
 .Channels-panel h4 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   font-size: 13px;
   font-weight: 600;
   color: #b9c6d8;
+}
+
+.Tools-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.Tool-tile {
+  border: 1px solid #5a6271;
+  background: #282c34;
+  color: #e6edf6;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px;
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+}
+
+.Tool-tile.tool-active {
+  border-color: #8aa2c4;
+  background: #313845;
+}
+
+.Tool-tile.Tool-tile-placeholder {
+  color: #9aa7bb;
+  cursor: not-allowed;
+  border-style: dashed;
 }
 
 .Channels-list {
@@ -151,6 +180,10 @@ canvas {
   background: #282c34;
 }
 
+canvas.eyedropper-active {
+  cursor: crosshair;
+}
+
 .canvas-info {
   border: 1px solid #454c59;
   background: #20242d;
@@ -158,7 +191,8 @@ canvas {
   font-size: 14px;
   padding: 8px 12px;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 20px;
 }
 
@@ -235,5 +269,9 @@ ul {
 
   .Future-tools {
     min-height: 120px;
+  }
+
+  .Tools-grid {
+    grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
   }
 }
