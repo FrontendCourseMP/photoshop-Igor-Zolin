@@ -53,6 +53,68 @@ body {
   color: #cfd8e3;
 }
 
+.Channels-panel h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #b9c6d8;
+}
+
+.Channels-list {
+  display: grid;
+  gap: 8px;
+}
+
+.Channel-card {
+  border: 1px solid #5a6271;
+  background: #282c34;
+  color: #e6edf6;
+  padding: 8px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+  text-align: left;
+}
+
+.Channel-card.active {
+  border-color: #8aa2c4;
+  background: #313845;
+}
+
+.Channel-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.Channel-thumb {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border: 1px solid #4e5868;
+  background: #111827;
+}
+
+.Channel-thumb-placeholder {
+  display: inline-flex;
+  width: 72px;
+  height: 72px;
+  border: 1px dashed #616b7a;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #9aa7bb;
+  background: #111827;
+}
+
+.Channels-help {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #9aa7bb;
+}
+
 .Future-tools-body {
   min-height: 170px;
   border: 1px dashed #667085;

@@ -4,21 +4,48 @@ import { DecodedImage, decodeGB7 } from "./formats/gb7Decoder";
 import { EncodedImage, encodeGB7 } from "./formats/gb7Encoder";
 import { CANVAS_BG, CANVAS_HEIGHT, CANVAS_WIDTH } from "./core/constants";
 import { LoadedImageInfo } from "./core/imageModel";
-import { detectImageColorDepthBits } from "./core/colorDepth";
+import { detectImageColorInfo } from "./core/colorDepth";
 import {
   createCanvasFromImageData,
   drawPreviewToWorkspace,
   resetCanvasBackground,
   setCanvasResolution,
 } from "./canvas/canvasUtils";
-import { drawImageToCanvas } from "./canvas/drawImageToCanvas";
+import {
+  applyChannelVisibility,
+  ChannelMode,
+  ChannelKey,
+  ChannelVisibility,
+  createChannelThumbnail,
+  DEFAULT_CHANNEL_VISIBILITY,
+} from "./canvas/channelPreview";
 
 function App() {
+  type CanvasViewMode = "workspace" | "native";
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
+  const [canvasViewMode, setCanvasViewMode] = useState<CanvasViewMode>("workspace");
+  const [hasAlphaChannel, setHasAlphaChannel] = useState(false);
+  const [channelMode, setChannelMode] = useState<ChannelMode>("rgb");
+  const [channelVisibility, setChannelVisibility] = useState<ChannelVisibility>(
+    DEFAULT_CHANNEL_VISIBILITY
+  );
+  const [channelThumbnails, setChannelThumbnails] = useState<
+    Partial<Record<ChannelKey, string>>
+  >({});
+
+  const resetChannelsForImage = (
+    alphaAvailable: boolean,
+    mode: ChannelMode
+  ): void => {
+    setHasAlphaChannel(alphaAvailable);
+    setChannelMode(mode);
+    setChannelVisibility({ ...DEFAULT_CHANNEL_VISIBILITY });
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -30,16 +57,97 @@ function App() {
     resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
   }, []);
 
+  useEffect(() => {
+    if (!currentImage) {
+      setChannelThumbnails({});
+      return;
+    }
+
+    const thumbnails: Partial<Record<ChannelKey, string>> = {};
+    const baseChannels: ChannelKey[] =
+      channelMode === "gray" ? ["gray"] : ["r", "g", "b"];
+
+    baseChannels.forEach((channel) => {
+      const thumb = createChannelThumbnail(
+        currentImage.data,
+        currentImage.width,
+        currentImage.height,
+        channel
+      );
+      if (thumb) {
+        thumbnails[channel] = thumb;
+      }
+    });
+
+    if (hasAlphaChannel) {
+      const alphaThumb = createChannelThumbnail(
+        currentImage.data,
+        currentImage.width,
+        currentImage.height,
+        "a"
+      );
+      if (alphaThumb) {
+        thumbnails.a = alphaThumb;
+      }
+    }
+
+    setChannelThumbnails(thumbnails);
+  }, [currentImage, hasAlphaChannel, channelMode]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !currentImage) {
+      return;
+    }
+
+    const visibleData = applyChannelVisibility(
+      currentImage.data,
+      channelVisibility,
+      hasAlphaChannel,
+      channelMode
+    );
+    const sourceCanvas = createCanvasFromImageData(
+      currentImage.width,
+      currentImage.height,
+      visibleData
+    );
+    if (!sourceCanvas) {
+      return;
+    }
+
+    if (canvasViewMode === "native") {
+      const context = setCanvasResolution(
+        canvas,
+        currentImage.width,
+        currentImage.height
+      );
+      if (!context) {
+        return;
+      }
+
+      context.clearRect(0, 0, currentImage.width, currentImage.height);
+      context.drawImage(sourceCanvas, 0, 0);
+      return;
+    }
+
+    drawPreviewToWorkspace(
+      canvas,
+      sourceCanvas,
+      currentImage.width,
+      currentImage.height,
+      CANVAS_WIDTH,
+      CANVAS_HEIGHT,
+      CANVAS_BG
+    );
+  }, [currentImage, channelVisibility, hasAlphaChannel, canvasViewMode, channelMode]);
+
   const handleUpload = (): void => {
     fileInputRef.current?.click();
   };
 
   const loadGb7AsNative = (decoded: DecodedImage): void => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-    drawImageToCanvas(canvas, decoded);
+    setCanvasViewMode("native");
+    resetChannelsForImage(decoded.hasMask, "gray");
 
     setCurrentImage({
       width: decoded.width,
@@ -55,29 +163,8 @@ function App() {
   };
 
   const loadGb7AsRgba = (decoded: DecodedImage): void => {
-    const sourceCanvas = createCanvasFromImageData(
-      decoded.width,
-      decoded.height,
-      decoded.data
-    );
-    if (!sourceCanvas) {
-      return;
-    }
-
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    drawPreviewToWorkspace(
-      canvas,
-      sourceCanvas,
-      decoded.width,
-      decoded.height,
-      CANVAS_WIDTH,
-      CANVAS_HEIGHT,
-      CANVAS_BG
-    );
+    setCanvasViewMode("workspace");
+    resetChannelsForImage(decoded.hasMask, "rgb");
 
     setCurrentImage({
       width: decoded.width,
@@ -144,7 +231,7 @@ function App() {
       fileName.endsWith(".jpg") ||
       fileName.endsWith(".jpeg")
     ) {
-      const detectedColorDepthBits = await detectImageColorDepthBits(file, fileName);
+      const detectedColorInfo = await detectImageColorInfo(file, fileName);
       const imageUrl = URL.createObjectURL(file);
       const image = new Image();
 
@@ -161,40 +248,26 @@ function App() {
         sourceContext.clearRect(0, 0, image.width, image.height);
         sourceContext.drawImage(image, 0, 0);
 
-        const canvas = canvasRef.current;
-        if (!canvas) {
-          URL.revokeObjectURL(imageUrl);
-          return;
-        }
-
-        drawPreviewToWorkspace(
-          canvas,
-          sourceCanvas,
-          image.width,
-          image.height,
-          CANVAS_WIDTH,
-          CANVAS_HEIGHT,
-          CANVAS_BG
-        );
-
         const originalData = sourceContext.getImageData(
           0,
           0,
           image.width,
           image.height
         );
-        const isPng = file.type === "image/png" || fileName.endsWith(".png");
+
+        setCanvasViewMode("workspace");
+        resetChannelsForImage(detectedColorInfo.hasAlphaChannel, "rgb");
 
         setLoadedImageInfo({
           width: image.width,
           height: image.height,
-          colorDepthBits: detectedColorDepthBits,
+          colorDepthBits: detectedColorInfo.colorDepthBits,
         });
         setCurrentImage({
           width: image.width,
           height: image.height,
           data: originalData.data,
-          hasMask: isPng,
+          hasMask: detectedColorInfo.hasAlphaChannel,
         });
 
         URL.revokeObjectURL(imageUrl);
@@ -283,6 +356,8 @@ function App() {
     link.click();
 
     const decoded = decodeGB7(buffer);
+    setCanvasViewMode("native");
+    resetChannelsForImage(decoded.hasMask, "gray");
 
     setCurrentImage({
       width: decoded.width,
@@ -307,6 +382,23 @@ function App() {
     if (event.target === dialogRef.current) {
       dialogRef.current?.close();
     }
+  };
+
+  const toggleChannelVisibility = (channel: ChannelKey): void => {
+    if (channel === "a" && !hasAlphaChannel) {
+      return;
+    }
+    if (
+      (channelMode === "gray" && (channel === "r" || channel === "g" || channel === "b")) ||
+      (channelMode === "rgb" && channel === "gray")
+    ) {
+      return;
+    }
+
+    setChannelVisibility((prev) => ({
+      ...prev,
+      [channel]: !prev[channel],
+    }));
   };
 
   return (
@@ -419,9 +511,54 @@ function App() {
 
           <section className="Future-tools">
             <h3>Инструменты</h3>
-            {/* <div className="Future-tools-body">
-              Будущие элементы управления будут добавлены сюда
-            </div> */}
+            <div className="Channels-panel">
+              <h4>Каналы</h4>
+              <div className="Channels-list">
+                {(channelMode === "gray" ? (["gray"] as ChannelKey[]) : (["r", "g", "b"] as ChannelKey[])).map((channel) => (
+                  <button
+                    key={channel}
+                    type="button"
+                    className={`Channel-card ${channelVisibility[channel] ? "active" : ""}`}
+                    onClick={() => toggleChannelVisibility(channel)}
+                  >
+                    <span className="Channel-name">
+                      {channel === "gray" ? "Gray" : channel.toUpperCase()}
+                    </span>
+                    {channelThumbnails[channel] ? (
+                      <img
+                        className="Channel-thumb"
+                        src={channelThumbnails[channel] as string}
+                        alt={`${channel === "gray" ? "Gray" : channel.toUpperCase()} channel preview`}
+                      />
+                    ) : (
+                      <span className="Channel-thumb-placeholder">Нет данных</span>
+                    )}
+                  </button>
+                ))}
+
+                {hasAlphaChannel && (
+                  <button
+                    type="button"
+                    className={`Channel-card ${channelVisibility.a ? "active" : ""}`}
+                    onClick={() => toggleChannelVisibility("a")}
+                  >
+                    <span className="Channel-name">A</span>
+                    {channelThumbnails.a ? (
+                      <img
+                        className="Channel-thumb"
+                        src={channelThumbnails.a}
+                        alt="Alpha channel preview"
+                      />
+                    ) : (
+                      <span className="Channel-thumb-placeholder">Нет данных</span>
+                    )}
+                  </button>
+                )}
+              </div>
+              <p className="Channels-help">
+                Нажмите на канал, чтобы включить или выключить его отображение на канвасе.
+              </p>
+            </div>
           </section>
         </aside>
 

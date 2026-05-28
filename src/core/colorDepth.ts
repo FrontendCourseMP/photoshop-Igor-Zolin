@@ -1,8 +1,20 @@
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 
+export type ImageColorInfo = {
+  colorDepthBits: number;
+  hasAlphaChannel: boolean;
+};
+
 export async function detectPngColorDepthBits(
   file: File
 ): Promise<number | null> {
+  const info = await detectPngColorInfo(file);
+  return info?.colorDepthBits ?? null;
+}
+
+export async function detectPngColorInfo(
+  file: File
+): Promise<ImageColorInfo | null> {
   const header = new Uint8Array(await file.slice(0, 29).arrayBuffer());
   if (header.length < 29) {
     return null;
@@ -36,7 +48,10 @@ export async function detectPngColorDepthBits(
     return null;
   }
 
-  return bitDepthPerChannel * channels;
+  return {
+    colorDepthBits: bitDepthPerChannel * channels,
+    hasAlphaChannel: (colorType & 0b100) !== 0,
+  };
 }
 
 export async function detectJpegColorDepthBits(
@@ -98,10 +113,23 @@ export async function detectImageColorDepthBits(
   file: File,
   fileName: string
 ): Promise<number> {
+  const info = await detectImageColorInfo(file, fileName);
+  return info.colorDepthBits;
+}
+
+export async function detectImageColorInfo(
+  file: File,
+  fileName: string
+): Promise<ImageColorInfo> {
   const isPng = file.type === "image/png" || fileName.endsWith(".png");
   if (isPng) {
-    const pngDepth = await detectPngColorDepthBits(file);
-    return pngDepth ?? 32;
+    const pngInfo = await detectPngColorInfo(file);
+    return (
+      pngInfo ?? {
+        colorDepthBits: 32,
+        hasAlphaChannel: true,
+      }
+    );
   }
 
   const isJpeg =
@@ -110,8 +138,14 @@ export async function detectImageColorDepthBits(
     fileName.endsWith(".jpeg");
   if (isJpeg) {
     const jpegDepth = await detectJpegColorDepthBits(file);
-    return jpegDepth ?? 24;
+    return {
+      colorDepthBits: jpegDepth ?? 24,
+      hasAlphaChannel: false,
+    };
   }
 
-  return 24;
+  return {
+    colorDepthBits: 24,
+    hasAlphaChannel: false,
+  };
 }
