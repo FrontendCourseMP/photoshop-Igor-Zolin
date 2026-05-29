@@ -44,6 +44,14 @@ function mapLevelValue(value: number, settings: LevelsSettings): number {
   return clampByte(corrected * BYTE_MAX);
 }
 
+function buildLevelsLut(settings: LevelsSettings): Uint8Array {
+  const lut = new Uint8Array(256);
+  for (let value = 0; value <= BYTE_MAX; value += 1) {
+    lut[value] = mapLevelValue(value, settings);
+  }
+  return lut;
+}
+
 export function buildHistogram(
   data: Uint8ClampedArray,
   target: LevelsTarget
@@ -84,32 +92,33 @@ export function applyLevelsToData(
   hasAlphaChannel: boolean
 ): Uint8ClampedArray {
   const output = new Uint8ClampedArray(sourceData);
+  const lut = buildLevelsLut(settings);
 
   for (let i = 0; i < sourceData.length; i += 4) {
     if (target === "master") {
-      output[i] = mapLevelValue(sourceData[i], settings);
-      output[i + 1] = mapLevelValue(sourceData[i + 1], settings);
-      output[i + 2] = mapLevelValue(sourceData[i + 2], settings);
+      output[i] = lut[sourceData[i]];
+      output[i + 1] = lut[sourceData[i + 1]];
+      output[i + 2] = lut[sourceData[i + 2]];
       continue;
     }
 
     if (target === "r") {
-      output[i] = mapLevelValue(sourceData[i], settings);
+      output[i] = lut[sourceData[i]];
       continue;
     }
 
     if (target === "g") {
-      output[i + 1] = mapLevelValue(sourceData[i + 1], settings);
+      output[i + 1] = lut[sourceData[i + 1]];
       continue;
     }
 
     if (target === "b") {
-      output[i + 2] = mapLevelValue(sourceData[i + 2], settings);
+      output[i + 2] = lut[sourceData[i + 2]];
       continue;
     }
 
     if (target === "gray") {
-      const mapped = mapLevelValue(sourceData[i], settings);
+      const mapped = lut[sourceData[i]];
       output[i] = mapped;
       output[i + 1] = mapped;
       output[i + 2] = mapped;
@@ -117,7 +126,7 @@ export function applyLevelsToData(
     }
 
     if (target === "a" && hasAlphaChannel) {
-      output[i + 3] = mapLevelValue(sourceData[i + 3], settings);
+      output[i + 3] = lut[sourceData[i + 3]];
     }
   }
 

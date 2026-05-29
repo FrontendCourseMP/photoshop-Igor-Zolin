@@ -87,6 +87,28 @@ const midInputFromGamma = (
   return clampMidInputToRange(mid, inputBlack, inputWhite);
 };
 
+const normalizeLevelsSettings = (settings: LevelsSettings): LevelsSettings => {
+  let inputBlack = Math.max(0, Math.min(253, Math.round(settings.inputBlack)));
+  let inputWhite = Math.max(2, Math.min(255, Math.round(settings.inputWhite)));
+
+  if (inputBlack > inputWhite - 2) {
+    inputWhite = Math.min(255, inputBlack + 2);
+  }
+  if (inputBlack > inputWhite - 2) {
+    inputBlack = Math.max(0, inputWhite - 2);
+  }
+
+  const gamma = Math.min(9.99, Math.max(0.1, settings.gamma));
+  const midInput = midInputFromGamma(gamma, inputBlack, inputWhite);
+  const safeGamma = gammaFromMidInput(midInput, inputBlack, inputWhite);
+
+  return {
+    inputBlack,
+    inputWhite,
+    gamma: safeGamma,
+  };
+};
+
 function App() {
   type CanvasViewMode = "workspace" | "native";
   type ToolKey = "none" | "eyedropper";
@@ -105,6 +127,9 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const levelsDialogRef = useRef<HTMLDialogElement | null>(null);
   const levelsHistogramCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const levelsPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewFrameRef = useRef<number | null>(null);
+  const pendingPreviewDataRef = useRef<Uint8ClampedArray | null>(null);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
@@ -149,12 +174,25 @@ function App() {
   };
 
   const clearLevelsDialogSession = (): void => {
+    if (previewFrameRef.current !== null) {
+      cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    pendingPreviewDataRef.current = null;
     setLevelsDialogOpen(false);
     setLevelsPreviewEnabled(true);
     setLevelsBaseImage(null);
     setLevelsInitialSettingsByTarget(null);
     levelsDialogRef.current?.close();
   };
+
+  useEffect(() => {
+    return () => {
+      if (previewFrameRef.current !== null) {
+        cancelAnimationFrame(previewFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -226,6 +264,23 @@ function App() {
     return result;
   };
 
+  const levelsPreviewData = useMemo(() => {
+    if (!levelsDialogOpen || !levelsBaseImage) {
+      return null;
+    }
+    if (!levelsPreviewEnabled) {
+      return new Uint8ClampedArray(levelsBaseImage.data);
+    }
+    return applyLevelsSettingsMapToData(levelsBaseImage.data, levelsSettingsByTarget);
+  }, [
+    levelsDialogOpen,
+    levelsBaseImage,
+    levelsPreviewEnabled,
+    levelsSettingsByTarget,
+    channelMode,
+    hasAlphaChannel,
+  ]);
+
   const levelsHistogram = useMemo(() => {
     const histogramSource =
       levelsDialogOpen && levelsBaseImage ? levelsBaseImage : currentImage;
@@ -281,34 +336,69 @@ function App() {
   }, [levelsHistogram, histogramScale]);
 
   useEffect(() => {
-    if (!levelsDialogOpen || !levelsBaseImage) {
+    const canvas = levelsPreviewCanvasRef.current;
+    if (!canvas || !levelsBaseImage || !levelsPreviewData) {
       return;
     }
 
-    const nextData = levelsPreviewEnabled
-      ? applyLevelsSettingsMapToData(levelsBaseImage.data, levelsSettingsByTarget)
-      : new Uint8ClampedArray(levelsBaseImage.data);
+    const sourceCanvas = createCanvasFromImageData(
+      levelsBaseImage.width,
+      levelsBaseImage.height,
+      levelsPreviewData
+    );
+    if (!sourceCanvas) {
+      return;
+    }
 
-    setCurrentImage((prev) => {
-      if (!prev) {
-        return prev;
+    const context = setCanvasResolution(canvas, canvas.width, canvas.height);
+    if (!context) {
+      return;
+    }
+
+    resetCanvasBackground(context, canvas.width, canvas.height, "#161a22");
+
+    const ratio = Math.min(
+      canvas.width / levelsBaseImage.width,
+      canvas.height / levelsBaseImage.height
+    );
+    const drawWidth = levelsBaseImage.width * ratio;
+    const drawHeight = levelsBaseImage.height * ratio;
+    const offsetX = (canvas.width - drawWidth) / 2;
+    const offsetY = (canvas.height - drawHeight) / 2;
+    context.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight);
+  }, [levelsBaseImage, levelsPreviewData]);
+
+  useEffect(() => {
+    if (!levelsDialogOpen || !levelsBaseImage || !levelsPreviewData) {
+      return;
+    }
+    pendingPreviewDataRef.current = new Uint8ClampedArray(levelsPreviewData);
+
+    if (previewFrameRef.current !== null) {
+      return;
+    }
+
+    previewFrameRef.current = requestAnimationFrame(() => {
+      previewFrameRef.current = null;
+      const nextData = pendingPreviewDataRef.current;
+      if (!nextData) {
+        return;
       }
-      return {
-        ...prev,
-        width: levelsBaseImage.width,
-        height: levelsBaseImage.height,
-        hasMask: levelsBaseImage.hasMask,
-        data: nextData,
-      };
+
+      setCurrentImage((prev) => {
+        if (!prev) {
+          return prev;
+        }
+        return {
+          ...prev,
+          width: levelsBaseImage.width,
+          height: levelsBaseImage.height,
+          hasMask: levelsBaseImage.hasMask,
+          data: nextData,
+        };
+      });
     });
-  }, [
-    levelsDialogOpen,
-    levelsBaseImage,
-    levelsPreviewEnabled,
-    levelsSettingsByTarget,
-    channelMode,
-    hasAlphaChannel,
-  ]);
+  }, [levelsDialogOpen, levelsBaseImage, levelsPreviewData]);
 
   useEffect(() => {
     if (!currentImage) {
@@ -701,7 +791,7 @@ function App() {
   ): void => {
     setLevelsSettingsByTarget((prev) => ({
       ...prev,
-      [levelsTarget]: updater(prev[levelsTarget]),
+      [levelsTarget]: normalizeLevelsSettings(updater(prev[levelsTarget])),
     }));
   };
 
@@ -710,8 +800,8 @@ function App() {
       return;
     }
     updateActiveLevelsSettings((prev) => {
-      const inputBlack = Math.min(253, Math.max(0, Math.round(value)));
-      const inputWhite = Math.max(prev.inputWhite, inputBlack + 2);
+      const inputWhite = prev.inputWhite;
+      const inputBlack = Math.min(inputWhite - 2, Math.max(0, Math.round(value)));
       const midInput = midInputFromGamma(prev.gamma, prev.inputBlack, prev.inputWhite);
       const clampedMid = clampMidInputToRange(midInput, inputBlack, inputWhite);
       const gamma = gammaFromMidInput(clampedMid, inputBlack, inputWhite);
@@ -724,8 +814,8 @@ function App() {
       return;
     }
     updateActiveLevelsSettings((prev) => {
-      const inputWhite = Math.min(255, Math.max(2, Math.round(value)));
-      const inputBlack = Math.min(prev.inputBlack, inputWhite - 2);
+      const inputBlack = prev.inputBlack;
+      const inputWhite = Math.max(inputBlack + 2, Math.min(255, Math.round(value)));
       const midInput = midInputFromGamma(prev.gamma, prev.inputBlack, prev.inputWhite);
       const clampedMid = clampMidInputToRange(midInput, inputBlack, inputWhite);
       const gamma = gammaFromMidInput(clampedMid, inputBlack, inputWhite);
@@ -737,10 +827,7 @@ function App() {
     if (!Number.isFinite(value)) {
       return;
     }
-    updateActiveLevelsSettings((prev) => ({
-      ...prev,
-      gamma: Math.min(9.99, Math.max(0.1, value)),
-    }));
+    updateActiveLevelsSettings((prev) => ({ ...prev, gamma: value }));
   };
 
   const handleLevelsMidInputChange = (value: number): void => {
@@ -1053,153 +1140,170 @@ function App() {
               </button>
             </div>
 
-            <div className="Levels-controls-row">
-              <label>
-                Канал
-                <select
-                  value={levelsTarget}
-                  onChange={(event) => setLevelsTarget(event.target.value as LevelsTarget)}
-                >
-                  {availableLevelsTargets.map((target) => (
-                    <option key={target} value={target}>
-                      {getLevelsTargetLabel(target)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div className="Levels-layout">
+              <div className="Levels-controls-column">
+                <div className="Levels-controls-row">
+                  <label>
+                    Канал
+                    <select
+                      value={levelsTarget}
+                      onChange={(event) =>
+                        setLevelsTarget(event.target.value as LevelsTarget)
+                      }
+                    >
+                      {availableLevelsTargets.map((target) => (
+                        <option key={target} value={target}>
+                          {getLevelsTargetLabel(target)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-              <label>
-                Масштаб
-                <select
-                  value={histogramScale}
-                  onChange={(event) =>
-                    setHistogramScale(event.target.value as HistogramScale)
-                  }
-                >
-                  <option value="linear">Линейный</option>
-                  <option value="log">Логарифмический</option>
-                </select>
-              </label>
-            </div>
+                  <label>
+                    Масштаб
+                    <select
+                      value={histogramScale}
+                      onChange={(event) =>
+                        setHistogramScale(event.target.value as HistogramScale)
+                      }
+                    >
+                      <option value="linear">Линейный</option>
+                      <option value="log">Логарифмический</option>
+                    </select>
+                  </label>
+                </div>
 
-            <label className="Levels-preview-toggle">
-              <input
-                type="checkbox"
-                checked={levelsPreviewEnabled}
-                onChange={(event) => setLevelsPreviewEnabled(event.target.checked)}
-              />
-              Предпросмотр
-            </label>
+                <div className="Levels-histogram">
+                  <canvas
+                    ref={levelsHistogramCanvasRef}
+                    width={512}
+                    height={180}
+                    aria-label="Гистограмма уровней"
+                  />
+                </div>
 
-            <div className="Levels-histogram">
-              <canvas
-                ref={levelsHistogramCanvasRef}
-                width={512}
-                height={180}
-                aria-label="Гистограмма уровней"
-              />
-            </div>
+                <div className="Levels-input-markers">
+                  <div className="Levels-markers-axis" />
+                  <input
+                    className="Levels-marker Levels-marker-black"
+                    type="range"
+                    min={0}
+                    max={activeLevelsSettings.inputWhite - 2}
+                    step={1}
+                    value={activeLevelsSettings.inputBlack}
+                    onChange={(event) =>
+                      handleLevelsBlackChange(event.target.valueAsNumber)
+                    }
+                    aria-label="Black input marker"
+                  />
+                  <input
+                    className="Levels-marker Levels-marker-gamma"
+                    type="range"
+                    min={activeLevelsSettings.inputBlack + 1}
+                    max={activeLevelsSettings.inputWhite - 1}
+                    step={1}
+                    value={levelsMidInput}
+                    onChange={(event) =>
+                      handleLevelsMidInputChange(event.target.valueAsNumber)
+                    }
+                    aria-label="Gamma input marker"
+                  />
+                  <input
+                    className="Levels-marker Levels-marker-white"
+                    type="range"
+                    min={activeLevelsSettings.inputBlack + 2}
+                    max={255}
+                    step={1}
+                    value={activeLevelsSettings.inputWhite}
+                    onChange={(event) =>
+                      handleLevelsWhiteChange(event.target.valueAsNumber)
+                    }
+                    aria-label="White input marker"
+                  />
+                  <div className="Levels-input-markers-scale">
+                    <span>0</span>
+                    <span>255</span>
+                  </div>
+                </div>
 
-            <div className="Levels-input-markers">
-              <div className="Levels-markers-axis" />
-              <input
-                className="Levels-marker Levels-marker-black"
-                type="range"
-                min={0}
-                max={activeLevelsSettings.inputWhite - 2}
-                step={1}
-                value={activeLevelsSettings.inputBlack}
-                onChange={(event) =>
-                  handleLevelsBlackChange(event.target.valueAsNumber)
-                }
-                aria-label="Black input marker"
-              />
-              <input
-                className="Levels-marker Levels-marker-gamma"
-                type="range"
-                min={activeLevelsSettings.inputBlack + 1}
-                max={activeLevelsSettings.inputWhite - 1}
-                step={1}
-                value={levelsMidInput}
-                onChange={(event) =>
-                  handleLevelsMidInputChange(event.target.valueAsNumber)
-                }
-                aria-label="Gamma input marker"
-              />
-              <input
-                className="Levels-marker Levels-marker-white"
-                type="range"
-                min={activeLevelsSettings.inputBlack + 2}
-                max={255}
-                step={1}
-                value={activeLevelsSettings.inputWhite}
-                onChange={(event) =>
-                  handleLevelsWhiteChange(event.target.valueAsNumber)
-                }
-                aria-label="White input marker"
-              />
-              <div className="Levels-input-markers-scale">
-                <span>0</span>
-                <span>255</span>
+                <div className="Levels-values-row">
+                  <label>
+                    Black
+                    <input
+                      type="number"
+                      min={0}
+                      max={activeLevelsSettings.inputWhite - 2}
+                      step={1}
+                      value={activeLevelsSettings.inputBlack}
+                      onChange={(event) =>
+                        handleLevelsBlackChange(event.target.valueAsNumber)
+                      }
+                    />
+                  </label>
+                  <label>
+                    Gamma
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={9.99}
+                      step={0.01}
+                      value={Number(activeLevelsSettings.gamma.toFixed(2))}
+                      onChange={(event) =>
+                        handleLevelsGammaChange(event.target.valueAsNumber)
+                      }
+                    />
+                  </label>
+                  <label>
+                    White
+                    <input
+                      type="number"
+                      min={activeLevelsSettings.inputBlack + 2}
+                      max={255}
+                      step={1}
+                      value={activeLevelsSettings.inputWhite}
+                      onChange={(event) =>
+                        handleLevelsWhiteChange(event.target.valueAsNumber)
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="Levels-actions">
+                  <button className="Nav-buttons" type="button" onClick={handleApplyLevels}>
+                    Применить
+                  </button>
+                  <button
+                    className="Nav-buttons"
+                    type="button"
+                    onClick={handleResetLevels}
+                  >
+                    Сброс
+                  </button>
+                  <button className="Nav-buttons" type="button" onClick={handleCancelLevels}>
+                    Отмена
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="Levels-values-row">
-              <label>
-                Black
-                <input
-                  type="number"
-                  min={0}
-                  max={activeLevelsSettings.inputWhite - 2}
-                  step={1}
-                  value={activeLevelsSettings.inputBlack}
-                  onChange={(event) =>
-                    handleLevelsBlackChange(event.target.valueAsNumber)
-                  }
-                />
-              </label>
-              <label>
-                Gamma
-                <input
-                  type="number"
-                  min={0.1}
-                  max={9.99}
-                  step={0.01}
-                  value={Number(activeLevelsSettings.gamma.toFixed(2))}
-                  onChange={(event) =>
-                    handleLevelsGammaChange(event.target.valueAsNumber)
-                  }
-                />
-              </label>
-              <label>
-                White
-                <input
-                  type="number"
-                  min={activeLevelsSettings.inputBlack + 2}
-                  max={255}
-                  step={1}
-                  value={activeLevelsSettings.inputWhite}
-                  onChange={(event) =>
-                    handleLevelsWhiteChange(event.target.valueAsNumber)
-                  }
-                />
-              </label>
-            </div>
+              <div className="Levels-preview-column">
+                <label className="Levels-preview-toggle">
+                  <input
+                    type="checkbox"
+                    checked={levelsPreviewEnabled}
+                    onChange={(event) => setLevelsPreviewEnabled(event.target.checked)}
+                  />
+                  Предпросмотр
+                </label>
 
-            <div className="Levels-actions">
-              <button className="Nav-buttons" type="button" onClick={handleApplyLevels}>
-                Применить
-              </button>
-              <button
-                className="Nav-buttons"
-                type="button"
-                onClick={handleResetLevels}
-              >
-                Сброс
-              </button>
-              <button className="Nav-buttons" type="button" onClick={handleCancelLevels}>
-                Отмена
-              </button>
+                <div className="Levels-preview-mini">
+                  <canvas
+                    ref={levelsPreviewCanvasRef}
+                    width={320}
+                    height={180}
+                    aria-label="Миниатюра предпросмотра уровней"
+                  />
+                </div>
+              </div>
             </div>
           </dialog>
 

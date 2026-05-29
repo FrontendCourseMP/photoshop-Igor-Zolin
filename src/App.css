@@ -1,24 +1,34 @@
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
   background-color: #282c34;
   color: white;
+  overflow: hidden;
 }
 
 .App {
   background-color: #282c34;
-  min-height: 80vh;
+  height: 100vh;
+  min-height: 0;
   color: white;
   font-size: 16px;
 }
 
 .App-main {
-  min-height: 80vh;
-  max-height: 100vh;
+  height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 10px;
   padding: 10px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .App-link {
@@ -30,23 +40,29 @@ body {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .Upload-menu {
   padding: 10px;
   border: 1px solid #5a6271;
   background: #20242d;
+  flex: 0 0 auto;
 }
 
 .Future-tools {
   flex: 1;
-  min-height: 240px;
+  min-height: 0;
   padding: 10px;
   border: 1px solid #5a6271;
   background: #20242d;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 .Tools-panel h4,
@@ -158,6 +174,7 @@ body {
 
 .Canvas-workspace {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -165,7 +182,8 @@ body {
 
 .canvas-container {
   width: 100%;
-  height: calc(100vh - 70px);
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   background: #282c34;
   border: 1px solid #454c59;
@@ -254,9 +272,26 @@ ul {
   border: 1px solid #5a6271;
   background: #20242d;
   color: white;
-  min-width: min(720px, 90vw);
+  min-width: min(980px, 92vw);
   max-width: 90vw;
   padding: 12px;
+}
+
+.Levels-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 8fr) minmax(0, 5fr);
+  grid-template-areas: "controls preview";
+  gap: 12px;
+  align-items: start;
+}
+
+.Levels-controls-column {
+  grid-area: controls;
+  min-width: 0;
+}
+
+.Levels-preview-column {
+  grid-area: preview;
 }
 
 .Levels-header {
@@ -312,6 +347,20 @@ ul {
   width: 14px;
   height: 14px;
   margin: 0;
+}
+
+.Levels-preview-mini {
+  border: 1px solid #5a6271;
+  background: #161a22;
+  margin-bottom: 10px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.Levels-preview-mini canvas {
+  width: 100%;
+  height: auto;
+  max-width: none;
 }
 
 .Levels-histogram {
@@ -453,10 +502,20 @@ ul {
 }
 
 @media (max-width: 768px) {
+  body {
+    overflow: auto;
+  }
+
+  .App {
+    height: auto;
+    min-height: 100vh;
+  }
+
   .App-main {
-    min-height: auto;
+    height: auto;
     grid-template-columns: 1fr;
     padding: 10px;
+    overflow: visible;
   }
 
   .canvas-container {
@@ -479,6 +538,19 @@ ul {
 
   .Levels-dialog {
     min-width: 92vw;
+  }
+
+  .Levels-layout {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "preview"
+      "controls";
+  }
+
+  .Levels-preview-column {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .Levels-values-row {
