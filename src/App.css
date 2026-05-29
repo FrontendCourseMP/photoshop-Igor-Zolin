@@ -250,6 +250,208 @@ ul {
   margin: 0 0 8px;
 }
 
+.Levels-dialog {
+  border: 1px solid #5a6271;
+  background: #20242d;
+  color: white;
+  min-width: min(720px, 90vw);
+  max-width: 90vw;
+  padding: 12px;
+}
+
+.Levels-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.Levels-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.Levels-close {
+  margin: 0;
+  padding: 4px 10px;
+  font-size: 14px;
+}
+
+.Levels-controls-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.Levels-controls-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.Levels-controls-row select {
+  background: #282c34;
+  color: #e6edf6;
+  border: 1px solid #5a6271;
+  padding: 6px 8px;
+}
+
+.Levels-preview-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #d7deea;
+}
+
+.Levels-preview-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.Levels-histogram {
+  border: 1px solid #5a6271;
+  background: #161a22;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.Levels-histogram canvas {
+  width: 100%;
+  height: auto;
+  max-width: none;
+}
+
+.Levels-input-markers {
+  position: relative;
+  padding: 6px 0 16px;
+  margin-bottom: 10px;
+}
+
+.Levels-markers-axis {
+  height: 2px;
+  background: #5a6271;
+  margin: 0 8px;
+}
+
+.Levels-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  pointer-events: none;
+}
+
+.Levels-marker::-webkit-slider-runnable-track {
+  height: 2px;
+  background: transparent;
+}
+
+.Levels-marker::-moz-range-track {
+  height: 2px;
+  background: transparent;
+}
+
+.Levels-marker::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 10px solid #d7deea;
+  margin-top: -3px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.Levels-marker::-moz-range-thumb {
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 10px solid #d7deea;
+  border-bottom: 0;
+  border-radius: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.Levels-marker-black {
+  top: 0;
+}
+
+.Levels-marker-gamma {
+  top: 0;
+}
+
+.Levels-marker-gamma::-webkit-slider-thumb {
+  border-top-color: #8fb0d9;
+}
+
+.Levels-marker-gamma::-moz-range-thumb {
+  border-top-color: #8fb0d9;
+}
+
+.Levels-marker-white {
+  top: 0;
+}
+
+.Levels-marker-white::-webkit-slider-thumb {
+  border-top-color: #ffffff;
+}
+
+.Levels-marker-white::-moz-range-thumb {
+  border-top-color: #ffffff;
+}
+
+.Levels-input-markers-scale {
+  margin: 8px 8px 0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #9aa7bb;
+}
+
+.Levels-values-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.Levels-values-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.Levels-values-row input[type="number"] {
+  width: 100%;
+  background: #282c34;
+  border: 1px solid #5a6271;
+  color: #e6edf6;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.Levels-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 @media (max-width: 768px) {
   .App-main {
     min-height: auto;
@@ -273,5 +475,13 @@ ul {
 
   .Tools-grid {
     grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  }
+
+  .Levels-dialog {
+    min-width: 92vw;
+  }
+
+  .Levels-values-row {
+    grid-template-columns: 1fr;
   }
 }
