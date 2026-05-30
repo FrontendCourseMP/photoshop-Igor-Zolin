@@ -905,6 +905,8 @@ function App() {
     }));
   };
 
+
+  // ----- Пипетка -----
   const getImagePointFromCanvasClick = (
     event: React.MouseEvent<HTMLCanvasElement>
   ): { x: number; y: number } | null => {
@@ -971,15 +973,15 @@ function App() {
     }
 
     const pixelIndex = (point.y * currentImage.width + point.x) * 4;
-    const visibleAlpha = visibleImageData[pixelIndex + 3];
+    const visibleAlpha = currentImage.data[pixelIndex + 3];
     if (visibleAlpha === 0) {
       setPickedPixel(null);
       return;
     }
 
-    const r = visibleImageData[pixelIndex];
-    const g = visibleImageData[pixelIndex + 1];
-    const b = visibleImageData[pixelIndex + 2];
+    const r = currentImage.data[pixelIndex];  
+    const g = currentImage.data[pixelIndex + 1];
+    const b = currentImage.data[pixelIndex + 2];
     const lab = rgbToCielab(r, g, b);
 
     setPickedPixel({
