@@ -1,10 +1,15 @@
 export type LevelsTarget = "master" | "r" | "g" | "b" | "a" | "gray";
 export type HistogramScale = "linear" | "log";
+type HistogramMasterMode = "luminance" | "gray";
 
 export type LevelsSettings = {
   inputBlack: number;
   inputWhite: number;
   gamma: number;
+};
+
+export type HistogramOptions = {
+  masterMode?: HistogramMasterMode;
 };
 
 const BYTE_MIN = 0;
@@ -28,6 +33,10 @@ function getMasterLuminanceBin(r: number, g: number, b: number): number {
   const bl = srgbToLinear(b);
   const luminance = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
   return clampByte(luminance * BYTE_MAX);
+}
+
+function getGrayBin(r: number, g: number, b: number): number {
+  return clampByte((r + g + b) / 3);
 }
 
 function mapLevelValue(value: number, settings: LevelsSettings): number {
@@ -54,9 +63,11 @@ function buildLevelsLut(settings: LevelsSettings): Uint8Array {
 
 export function buildHistogram(
   data: Uint8ClampedArray,
-  target: LevelsTarget
+  target: LevelsTarget,
+  options: HistogramOptions = {}
 ): Uint32Array {
   const bins = new Uint32Array(256);
+  const masterMode = options.masterMode ?? "luminance";
 
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
@@ -66,7 +77,10 @@ export function buildHistogram(
 
     let value = 0;
     if (target === "master") {
-      value = getMasterLuminanceBin(r, g, b);
+      value =
+        masterMode === "gray"
+          ? getGrayBin(r, g, b)
+          : getMasterLuminanceBin(r, g, b);
     } else if (target === "r") {
       value = r;
     } else if (target === "g") {
@@ -76,7 +90,7 @@ export function buildHistogram(
     } else if (target === "a") {
       value = a;
     } else {
-      value = clampByte((r + g + b) / 3);
+      value = getGrayBin(r, g, b);
     }
 
     bins[value] += 1;

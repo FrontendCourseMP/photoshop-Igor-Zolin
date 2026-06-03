@@ -293,8 +293,10 @@ function App() {
     if (!histogramSource) {
       return null;
     }
-    return buildHistogram(histogramSource.data, levelsTarget);
-  }, [currentImage, levelsTarget, levelsDialogOpen, levelsBaseImage]);
+    return buildHistogram(histogramSource.data, levelsTarget, {
+      masterMode: channelMode === "gray" ? "gray" : "luminance",
+    });
+  }, [currentImage, levelsTarget, levelsDialogOpen, levelsBaseImage, channelMode]);
 
   useEffect(() => {
     const canvas = levelsHistogramCanvasRef.current;
