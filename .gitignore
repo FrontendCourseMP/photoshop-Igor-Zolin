@@ -25,3 +25,4 @@ yarn-error.log*
 funcs.txt
 public/test-imgs/
 src/App.test.tsx
+dist

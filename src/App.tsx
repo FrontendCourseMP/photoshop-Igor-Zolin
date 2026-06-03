@@ -83,8 +83,29 @@ const midInputFromGamma = (
   const safeGamma = Math.min(9.99, Math.max(0.1, gamma));
   const normalizedMid = Math.pow(0.5, 1 / safeGamma);
   const range = Math.max(1, inputWhite - inputBlack);
-  const mid = Math.round(inputBlack + normalizedMid * range);
-  return clampMidInputToRange(mid, inputBlack, inputWhite);
+  return clampMidInputToRange(inputBlack + normalizedMid * range, inputBlack, inputWhite);
+};
+
+const relativeMidPositionFromGamma = (
+  gamma: number,
+  inputBlack: number,
+  inputWhite: number
+): number => {
+  const range = Math.max(1, inputWhite - inputBlack);
+  return (midInputFromGamma(gamma, inputBlack, inputWhite) - inputBlack) / range;
+};
+
+const midInputFromRelativePosition = (
+  relativePosition: number,
+  inputBlack: number,
+  inputWhite: number
+): number => {
+  const range = Math.max(1, inputWhite - inputBlack);
+  return clampMidInputToRange(
+    inputBlack + relativePosition * range,
+    inputBlack,
+    inputWhite
+  );
 };
 
 const normalizeLevelsSettings = (settings: LevelsSettings): LevelsSettings => {
@@ -128,8 +149,6 @@ function App() {
   const levelsDialogRef = useRef<HTMLDialogElement | null>(null);
   const levelsHistogramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const levelsPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const previewFrameRef = useRef<number | null>(null);
-  const pendingPreviewDataRef = useRef<Uint8ClampedArray | null>(null);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
@@ -174,25 +193,12 @@ function App() {
   };
 
   const clearLevelsDialogSession = (): void => {
-    if (previewFrameRef.current !== null) {
-      cancelAnimationFrame(previewFrameRef.current);
-      previewFrameRef.current = null;
-    }
-    pendingPreviewDataRef.current = null;
     setLevelsDialogOpen(false);
     setLevelsPreviewEnabled(true);
     setLevelsBaseImage(null);
     setLevelsInitialSettingsByTarget(null);
     levelsDialogRef.current?.close();
   };
-
-  useEffect(() => {
-    return () => {
-      if (previewFrameRef.current !== null) {
-        cancelAnimationFrame(previewFrameRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -367,38 +373,6 @@ function App() {
     const offsetY = (canvas.height - drawHeight) / 2;
     context.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight);
   }, [levelsBaseImage, levelsPreviewData]);
-
-  useEffect(() => {
-    if (!levelsDialogOpen || !levelsBaseImage || !levelsPreviewData) {
-      return;
-    }
-    pendingPreviewDataRef.current = new Uint8ClampedArray(levelsPreviewData);
-
-    if (previewFrameRef.current !== null) {
-      return;
-    }
-
-    previewFrameRef.current = requestAnimationFrame(() => {
-      previewFrameRef.current = null;
-      const nextData = pendingPreviewDataRef.current;
-      if (!nextData) {
-        return;
-      }
-
-      setCurrentImage((prev) => {
-        if (!prev) {
-          return prev;
-        }
-        return {
-          ...prev,
-          width: levelsBaseImage.width,
-          height: levelsBaseImage.height,
-          hasMask: levelsBaseImage.hasMask,
-          data: nextData,
-        };
-      });
-    });
-  }, [levelsDialogOpen, levelsBaseImage, levelsPreviewData]);
 
   useEffect(() => {
     if (!currentImage) {
@@ -802,9 +776,17 @@ function App() {
     updateActiveLevelsSettings((prev) => {
       const inputWhite = prev.inputWhite;
       const inputBlack = Math.min(inputWhite - 2, Math.max(0, Math.round(value)));
-      const midInput = midInputFromGamma(prev.gamma, prev.inputBlack, prev.inputWhite);
-      const clampedMid = clampMidInputToRange(midInput, inputBlack, inputWhite);
-      const gamma = gammaFromMidInput(clampedMid, inputBlack, inputWhite);
+      const relativeMid = relativeMidPositionFromGamma(
+        prev.gamma,
+        prev.inputBlack,
+        prev.inputWhite
+      );
+      const midInput = midInputFromRelativePosition(
+        relativeMid,
+        inputBlack,
+        inputWhite
+      );
+      const gamma = gammaFromMidInput(midInput, inputBlack, inputWhite);
       return { inputBlack, inputWhite, gamma };
     });
   };
@@ -816,9 +798,17 @@ function App() {
     updateActiveLevelsSettings((prev) => {
       const inputBlack = prev.inputBlack;
       const inputWhite = Math.max(inputBlack + 2, Math.min(255, Math.round(value)));
-      const midInput = midInputFromGamma(prev.gamma, prev.inputBlack, prev.inputWhite);
-      const clampedMid = clampMidInputToRange(midInput, inputBlack, inputWhite);
-      const gamma = gammaFromMidInput(clampedMid, inputBlack, inputWhite);
+      const relativeMid = relativeMidPositionFromGamma(
+        prev.gamma,
+        prev.inputBlack,
+        prev.inputWhite
+      );
+      const midInput = midInputFromRelativePosition(
+        relativeMid,
+        inputBlack,
+        inputWhite
+      );
+      const gamma = gammaFromMidInput(midInput, inputBlack, inputWhite);
       return { inputBlack, inputWhite, gamma };
     });
   };
@@ -836,7 +826,7 @@ function App() {
     }
     updateActiveLevelsSettings((prev) => {
       const midInput = clampMidInputToRange(
-        Math.round(value),
+        value,
         prev.inputBlack,
         prev.inputWhite
       );
@@ -979,7 +969,7 @@ function App() {
       return;
     }
 
-    const r = currentImage.data[pixelIndex];  
+    const r = currentImage.data[pixelIndex];
     const g = currentImage.data[pixelIndex + 1];
     const b = currentImage.data[pixelIndex + 2];
     const lab = rgbToCielab(r, g, b);
@@ -1190,7 +1180,7 @@ function App() {
                     className="Levels-marker Levels-marker-black"
                     type="range"
                     min={0}
-                    max={activeLevelsSettings.inputWhite - 2}
+                    max={255}
                     step={1}
                     value={activeLevelsSettings.inputBlack}
                     onChange={(event) =>
@@ -1201,9 +1191,9 @@ function App() {
                   <input
                     className="Levels-marker Levels-marker-gamma"
                     type="range"
-                    min={activeLevelsSettings.inputBlack + 1}
-                    max={activeLevelsSettings.inputWhite - 1}
-                    step={1}
+                    min={0}
+                    max={255}
+                    step="any"
                     value={levelsMidInput}
                     onChange={(event) =>
                       handleLevelsMidInputChange(event.target.valueAsNumber)
@@ -1213,7 +1203,7 @@ function App() {
                   <input
                     className="Levels-marker Levels-marker-white"
                     type="range"
-                    min={activeLevelsSettings.inputBlack + 2}
+                    min={0}
                     max={255}
                     step={1}
                     value={activeLevelsSettings.inputWhite}
