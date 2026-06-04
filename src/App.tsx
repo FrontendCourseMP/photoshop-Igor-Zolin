@@ -70,6 +70,13 @@ type CanvasImageLayout = {
   offsetY: number;
 };
 
+type PanDragState = {
+  startClientX: number;
+  startClientY: number;
+  startScrollLeft: number;
+  startScrollTop: number;
+};
+
 const createDefaultLevelsSettingsMap = (): LevelsSettingsMap => ({
   master: { ...DEFAULT_LEVELS_SETTINGS },
   r: { ...DEFAULT_LEVELS_SETTINGS },
@@ -215,7 +222,7 @@ const normalizeLevelsSettings = (settings: LevelsSettings): LevelsSettings => {
 };
 
 function App() {
-  type ToolKey = "none" | "eyedropper";
+  type ToolKey = "none" | "eyedropper" | "hand";
   type PickedPixel = {
     x: number;
     y: number;
@@ -228,6 +235,7 @@ function App() {
   };
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasContainerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const levelsDialogRef = useRef<HTMLDialogElement | null>(null);
   const levelsHistogramCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -236,10 +244,14 @@ function App() {
   const filterDialogRef = useRef<HTMLDialogElement | null>(null);
   const filterPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const filterAbortRef = useRef<AbortController | null>(null);
+  const panDragRef = useRef<PanDragState | null>(null);
+  const viewScaleFrameRef = useRef<number | null>(null);
+  const pendingViewScaleRef = useRef(100);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
   const [viewScalePercent, setViewScalePercent] = useState(100);
+  const [isPanning, setIsPanning] = useState(false);
   const [hasAlphaChannel, setHasAlphaChannel] = useState(false);
   const [channelMode, setChannelMode] = useState<ChannelMode>("rgb");
   const [channelVisibility, setChannelVisibility] = useState<ChannelVisibility>(
@@ -292,6 +304,20 @@ function App() {
       }
     }
     return false;
+  };
+
+  const cancelPendingViewScaleFrame = (): void => {
+    if (viewScaleFrameRef.current !== null) {
+      cancelAnimationFrame(viewScaleFrameRef.current);
+      viewScaleFrameRef.current = null;
+    }
+  };
+
+  const setViewScaleImmediately = (scalePercent: number): void => {
+    const safeScale = clampViewScalePercent(scalePercent);
+    cancelPendingViewScaleFrame();
+    pendingViewScaleRef.current = safeScale;
+    setViewScalePercent(safeScale);
   };
 
   const resetChannelsForImage = (
@@ -389,6 +415,12 @@ function App() {
     resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      cancelPendingViewScaleFrame();
+    };
+  }, []);
+
   const resolveResizeTargetDimensions = (
     unit = resizeUnit,
     widthValue = resizeWidthValue,
@@ -479,6 +511,27 @@ function App() {
       channelMode
     );
   }, [currentImage, channelVisibility, hasAlphaChannel, channelMode]);
+
+  const scaledViewCanvas = useMemo(() => {
+    if (!currentImage || !visibleImageData) {
+      return null;
+    }
+
+    const ratio = clampViewScalePercent(viewScalePercent) / 100;
+    const drawWidth = Math.max(1, Math.round(currentImage.width * ratio));
+    const drawHeight = Math.max(1, Math.round(currentImage.height * ratio));
+    const scaledData = resizeImageData(
+      visibleImageData,
+      currentImage.width,
+      currentImage.height,
+      drawWidth,
+      drawHeight,
+      DEFAULT_INTERPOLATION_METHOD
+    );
+    const canvas = createCanvasFromImageData(drawWidth, drawHeight, scaledData);
+
+    return canvas ? { canvas, drawWidth, drawHeight } : null;
+  }, [currentImage, visibleImageData, viewScalePercent]);
 
   const availableLevelsTargets = useMemo((): LevelsTarget[] => {
     const base = channelMode === "gray" ? (["master", "gray"] as LevelsTarget[]) : (["master", "r", "g", "b"] as LevelsTarget[]);
@@ -804,22 +857,20 @@ function App() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !currentImage) {
+    if (!canvas) {
       return;
     }
 
-    const visibleData = visibleImageData;
-    if (!visibleData) {
-      return;
-    }
-
-    const layout = getCanvasImageLayout(
-      currentImage.width,
-      currentImage.height,
-      viewScalePercent
-    );
-    const canvasWidth = Math.max(CANVAS_WIDTH, layout.drawWidth);
-    const canvasHeight = Math.max(CANVAS_HEIGHT, layout.drawHeight);
+    const layout = scaledViewCanvas
+      ? {
+          drawWidth: scaledViewCanvas.drawWidth,
+          drawHeight: scaledViewCanvas.drawHeight,
+          offsetX: Math.max(0, Math.round((CANVAS_WIDTH - scaledViewCanvas.drawWidth) / 2)),
+          offsetY: Math.max(0, Math.round((CANVAS_HEIGHT - scaledViewCanvas.drawHeight) / 2)),
+        }
+      : null;
+    const canvasWidth = Math.max(CANVAS_WIDTH, layout?.drawWidth ?? CANVAS_WIDTH);
+    const canvasHeight = Math.max(CANVAS_HEIGHT, layout?.drawHeight ?? CANVAS_HEIGHT);
     const context = setCanvasResolution(canvas, canvasWidth, canvasHeight);
     if (!context) {
       return;
@@ -827,21 +878,12 @@ function App() {
 
     resetCanvasBackground(context, canvasWidth, canvasHeight, CANVAS_BG);
 
-    const scaledData = resizeImageData(
-      visibleData,
-      currentImage.width,
-      currentImage.height,
-      layout.drawWidth,
-      layout.drawHeight,
-      DEFAULT_INTERPOLATION_METHOD
-    );
+    if (!scaledViewCanvas || !layout) {
+      return;
+    }
 
-    context.putImageData(
-      new ImageData(new Uint8ClampedArray(scaledData), layout.drawWidth, layout.drawHeight),
-      layout.offsetX,
-      layout.offsetY
-    );
-  }, [currentImage, visibleImageData, viewScalePercent]);
+    context.drawImage(scaledViewCanvas.canvas, layout.offsetX, layout.offsetY);
+  }, [scaledViewCanvas]);
 
   const handleUpload = (): void => {
     fileInputRef.current?.click();
@@ -864,7 +906,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
-    setViewScalePercent(calculateInitialViewScalePercent(decoded.width, decoded.height));
+    setViewScaleImmediately(calculateInitialViewScalePercent(decoded.width, decoded.height));
     setPickedPixel(null);
   };
 
@@ -885,7 +927,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.hasMask ? 32 : 24,
     });
-    setViewScalePercent(calculateInitialViewScalePercent(decoded.width, decoded.height));
+    setViewScaleImmediately(calculateInitialViewScalePercent(decoded.width, decoded.height));
     setPickedPixel(null);
   };
 
@@ -987,7 +1029,7 @@ function App() {
           data: originalData.data,
           hasMask: effectiveHasAlpha,
         });
-        setViewScalePercent(calculateInitialViewScalePercent(image.width, image.height));
+        setViewScaleImmediately(calculateInitialViewScalePercent(image.width, image.height));
         setPickedPixel(null);
 
         URL.revokeObjectURL(imageUrl);
@@ -1097,7 +1139,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
-    setViewScalePercent(calculateInitialViewScalePercent(decoded.width, decoded.height));
+    setViewScaleImmediately(calculateInitialViewScalePercent(decoded.width, decoded.height));
     setPickedPixel(null);
     URL.revokeObjectURL(url);
   };
@@ -1122,7 +1164,13 @@ function App() {
     if (!Number.isFinite(value)) {
       return;
     }
-    setViewScalePercent(clampViewScalePercent(value));
+    pendingViewScaleRef.current = clampViewScalePercent(value);
+    if (viewScaleFrameRef.current === null) {
+      viewScaleFrameRef.current = requestAnimationFrame(() => {
+        viewScaleFrameRef.current = null;
+        setViewScalePercent(pendingViewScaleRef.current);
+      });
+    }
   };
 
   const openResizeDialog = (): void => {
@@ -1616,6 +1664,28 @@ function App() {
   const handleCanvasMouseDown = (
     event: React.MouseEvent<HTMLCanvasElement>
   ): void => {
+    if (activeTool === "hand" && event.button === 0 && currentImage && scaledViewCanvas) {
+      const container = canvasContainerRef.current;
+      if (!container) {
+        return;
+      }
+
+      const point = getImagePointFromCanvasClick(event);
+      if (!point) {
+        return;
+      }
+
+      event.preventDefault();
+      panDragRef.current = {
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startScrollLeft: container.scrollLeft,
+        startScrollTop: container.scrollTop,
+      };
+      setIsPanning(true);
+      return;
+    }
+
     if (activeTool !== "eyedropper" || event.button !== 0 || !currentImage || !visibleImageData) {
       return;
     }
@@ -1626,15 +1696,15 @@ function App() {
     }
 
     const pixelIndex = (point.y * currentImage.width + point.x) * 4;
-    const visibleAlpha = currentImage.data[pixelIndex + 3];
+    const visibleAlpha = visibleImageData[pixelIndex + 3];
     if (visibleAlpha === 0) {
       setPickedPixel(null);
       return;
     }
 
-    const r = currentImage.data[pixelIndex];
-    const g = currentImage.data[pixelIndex + 1];
-    const b = currentImage.data[pixelIndex + 2];
+    const r = visibleImageData[pixelIndex];
+    const g = visibleImageData[pixelIndex + 1];
+    const b = visibleImageData[pixelIndex + 2];
     const lab = rgbToCielab(r, g, b);
 
     setPickedPixel({
@@ -1647,6 +1717,31 @@ function App() {
       labA: lab.a,
       labB: lab.b,
     });
+  };
+
+  const handleCanvasMouseMove = (
+    event: React.MouseEvent<HTMLCanvasElement>
+  ): void => {
+    if (activeTool !== "hand" || !isPanning || !panDragRef.current) {
+      return;
+    }
+
+    const container = canvasContainerRef.current;
+    if (!container) {
+      return;
+    }
+
+    container.scrollLeft =
+      panDragRef.current.startScrollLeft -
+      (event.clientX - panDragRef.current.startClientX);
+    container.scrollTop =
+      panDragRef.current.startScrollTop -
+      (event.clientY - panDragRef.current.startClientY);
+  };
+
+  const stopCanvasPan = (): void => {
+    panDragRef.current = null;
+    setIsPanning(false);
   };
 
   const getLevelsTargetLabel = (target: LevelsTarget): string => {
@@ -2278,6 +2373,15 @@ function App() {
                 >
                   Пипетка
                 </button>
+                <button
+                  type="button"
+                  className={`Tool-tile ${activeTool === "hand" ? "tool-active" : ""}`}
+                  onClick={() =>
+                    setActiveTool((prev) => (prev === "hand" ? "none" : "hand"))
+                  }
+                >
+                  Рука
+                </button>
                 <button type="button" className="Tool-tile" onClick={openLevelsDialog}>
                   Уровни
                 </button>
@@ -2342,14 +2446,23 @@ function App() {
         </aside>
 
         <section className="Canvas-workspace">
-          <div className="canvas-container">
+          <div className="canvas-container" ref={canvasContainerRef}>
             <canvas
               ref={canvasRef}
               width={CANVAS_WIDTH}
               height={CANVAS_HEIGHT}
               id="myCanvas"
               onMouseDown={handleCanvasMouseDown}
-              className={activeTool === "eyedropper" ? "eyedropper-active" : ""}
+              onMouseMove={handleCanvasMouseMove}
+              onMouseUp={stopCanvasPan}
+              onMouseLeave={stopCanvasPan}
+              className={[
+                activeTool === "eyedropper" ? "eyedropper-active" : "",
+                activeTool === "hand" ? "hand-active" : "",
+                isPanning ? "panning-active" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
               Your browser does not support the HTML canvas tag.
             </canvas>
