@@ -30,8 +30,17 @@ import {
   INTERPOLATION_ALGORITHMS,
   InterpolationMethod,
   resizeImageData,
-  resizeImageDataRegion,
 } from "./core/imageScale";
+import {
+  applyKernelFilterAsync,
+  applyMedianFilterAsync,
+  FilterOperation,
+  getKernelPreset,
+  KernelFilterChannel,
+  KernelPaddingMode,
+  KernelPresetId,
+  KERNEL_PRESETS,
+} from "./core/kernelFilter";
 
 const DEFAULT_LEVELS_SETTINGS: LevelsSettings = {
   inputBlack: 0,
@@ -50,6 +59,7 @@ const MAX_RESIZE_DIMENSION = 12000;
 const MAX_RESIZE_PIXELS = 64_000_000;
 
 type ResizeUnit = "percent" | "pixels";
+type FilterChannelSelection = Record<ChannelKey, boolean>;
 
 type LevelsSettingsMap = Record<LevelsTarget, LevelsSettings>;
 
@@ -68,6 +78,14 @@ const createDefaultLevelsSettingsMap = (): LevelsSettingsMap => ({
   a: { ...DEFAULT_LEVELS_SETTINGS },
   gray: { ...DEFAULT_LEVELS_SETTINGS },
 });
+
+const DEFAULT_FILTER_CHANNELS: FilterChannelSelection = {
+  r: true,
+  g: true,
+  b: true,
+  a: false,
+  gray: true,
+};
 
 const cloneLevelsSettingsMap = (source: LevelsSettingsMap): LevelsSettingsMap => ({
   master: { ...source.master },
@@ -111,8 +129,8 @@ const getCanvasImageLayout = (
   return {
     drawWidth,
     drawHeight,
-    offsetX: Math.round((CANVAS_WIDTH - drawWidth) / 2),
-    offsetY: Math.round((CANVAS_HEIGHT - drawHeight) / 2),
+    offsetX: Math.max(0, Math.round((CANVAS_WIDTH - drawWidth) / 2)),
+    offsetY: Math.max(0, Math.round((CANVAS_HEIGHT - drawHeight) / 2)),
   };
 };
 
@@ -215,6 +233,9 @@ function App() {
   const levelsHistogramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const levelsPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const resizeDialogRef = useRef<HTMLDialogElement | null>(null);
+  const filterDialogRef = useRef<HTMLDialogElement | null>(null);
+  const filterPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const filterAbortRef = useRef<AbortController | null>(null);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
@@ -247,6 +268,22 @@ function App() {
     DEFAULT_INTERPOLATION_METHOD
   );
   const [resizeValidationMessage, setResizeValidationMessage] = useState("");
+  const [filterPreset, setFilterPreset] = useState<KernelPresetId>("identity");
+  const [filterKernelValues, setFilterKernelValues] = useState<number[]>(
+    () => [...getKernelPreset("identity").values]
+  );
+  const [filterChannels, setFilterChannels] = useState<FilterChannelSelection>({
+    ...DEFAULT_FILTER_CHANNELS,
+  });
+  const [filterPadding, setFilterPadding] = useState<KernelPaddingMode>("copy");
+  const [filterPreviewEnabled, setFilterPreviewEnabled] = useState(true);
+  const [filterDialogOpen, setFilterDialogOpen] = useState(false);
+  const [filterBaseImage, setFilterBaseImage] = useState<EncodedImage | null>(null);
+  const [filterPreviewData, setFilterPreviewData] =
+    useState<Uint8ClampedArray | null>(null);
+  const [filterProcessing, setFilterProcessing] = useState(false);
+  const [filterErrorMessage, setFilterErrorMessage] = useState("");
+  const [filterOperation, setFilterOperation] = useState<FilterOperation>("kernel");
 
   const hasTransparentPixels = (data: Uint8ClampedArray): boolean => {
     for (let i = 3; i < data.length; i += 4) {
@@ -264,6 +301,74 @@ function App() {
     setHasAlphaChannel(alphaAvailable);
     setChannelMode(mode);
     setChannelVisibility({ ...DEFAULT_CHANNEL_VISIBILITY });
+  };
+
+  const resetFilterDialogSettings = (): void => {
+    setFilterOperation("kernel");
+    setFilterPreset("identity");
+    setFilterKernelValues([...getKernelPreset("identity").values]);
+    setFilterChannels({ ...DEFAULT_FILTER_CHANNELS });
+    setFilterPadding("copy");
+    setFilterPreviewEnabled(true);
+    setFilterPreviewData(null);
+    setFilterProcessing(false);
+    setFilterErrorMessage("");
+  };
+
+  const getSelectedFilterChannels = (
+    selection = filterChannels
+  ): KernelFilterChannel[] => {
+    const channels: KernelFilterChannel[] = [];
+
+    if (channelMode === "gray") {
+      if (selection.gray) {
+        channels.push("r", "g", "b");
+      }
+    } else {
+      if (selection.r) {
+        channels.push("r");
+      }
+      if (selection.g) {
+        channels.push("g");
+      }
+      if (selection.b) {
+        channels.push("b");
+      }
+    }
+
+    if (hasAlphaChannel && selection.a) {
+      channels.push("a");
+    }
+
+    return channels;
+  };
+
+  const getFilterKernelValidationMessage = (): string => {
+    if (filterOperation === "kernel" && filterKernelValues.length !== 9) {
+      return "Ядро должно содержать 9 значений";
+    }
+    if (filterOperation === "kernel" && !filterKernelValues.every(Number.isFinite)) {
+      return "Все значения ядра должны быть числами";
+    }
+    if (getSelectedFilterChannels().length === 0) {
+      return "Выберите хотя бы один канал";
+    }
+    return "";
+  };
+
+  const abortFilterPreview = (): void => {
+    filterAbortRef.current?.abort();
+    filterAbortRef.current = null;
+  };
+
+  const clearFilterDialogSession = (): void => {
+    abortFilterPreview();
+    setFilterDialogOpen(false);
+    setFilterBaseImage(null);
+    setFilterPreviewData(null);
+    setFilterProcessing(false);
+    setFilterErrorMessage("");
+    filterDialogRef.current?.close();
   };
 
   const clearLevelsDialogSession = (): void => {
@@ -533,6 +638,134 @@ function App() {
   }, [levelsBaseImage, levelsPreviewData]);
 
   useEffect(() => {
+    if (!filterDialogOpen || !filterBaseImage) {
+      return;
+    }
+
+    abortFilterPreview();
+
+    if (!filterPreviewEnabled) {
+      setFilterPreviewData(new Uint8ClampedArray(filterBaseImage.data));
+      setFilterProcessing(false);
+      setFilterErrorMessage("");
+      return;
+    }
+
+    const validationMessage = getFilterKernelValidationMessage();
+    if (validationMessage) {
+      setFilterPreviewData(new Uint8ClampedArray(filterBaseImage.data));
+      setFilterProcessing(false);
+      setFilterErrorMessage(validationMessage);
+      return;
+    }
+
+    const abortController = new AbortController();
+    filterAbortRef.current = abortController;
+    setFilterProcessing(true);
+    setFilterErrorMessage("");
+
+    const filterPromise =
+      filterOperation === "median3x3"
+        ? applyMedianFilterAsync(
+            filterBaseImage.data,
+            filterBaseImage.width,
+            filterBaseImage.height,
+            {
+              channels: getSelectedFilterChannels(),
+              padding: filterPadding,
+              rowsPerChunk: 16,
+              signal: abortController.signal,
+            }
+          )
+        : applyKernelFilterAsync(
+            filterBaseImage.data,
+            filterBaseImage.width,
+            filterBaseImage.height,
+            filterKernelValues,
+            {
+              channels: getSelectedFilterChannels(),
+              padding: filterPadding,
+              rowsPerChunk: 16,
+              signal: abortController.signal,
+            }
+          );
+
+    filterPromise
+      .then((nextData) => {
+        if (!abortController.signal.aborted) {
+          setFilterPreviewData(nextData);
+          setFilterErrorMessage("");
+        }
+      })
+      .catch((error: unknown) => {
+        if (abortController.signal.aborted) {
+          return;
+        }
+        setFilterPreviewData(new Uint8ClampedArray(filterBaseImage.data));
+        setFilterErrorMessage(
+          error instanceof Error ? error.message : "Не удалось применить фильтр"
+        );
+      })
+      .finally(() => {
+        if (!abortController.signal.aborted) {
+          setFilterProcessing(false);
+          filterAbortRef.current = null;
+        }
+      });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [
+    channelMode,
+    filterBaseImage,
+    filterChannels,
+    filterDialogOpen,
+    filterKernelValues,
+    filterOperation,
+    filterPadding,
+    filterPreviewEnabled,
+    hasAlphaChannel,
+  ]);
+
+  useEffect(() => {
+    const canvas = filterPreviewCanvasRef.current;
+    if (!canvas || !filterBaseImage || !filterPreviewData) {
+      return;
+    }
+
+    const context = setCanvasResolution(canvas, canvas.width, canvas.height);
+    if (!context) {
+      return;
+    }
+
+    resetCanvasBackground(context, canvas.width, canvas.height, "#161a22");
+
+    const ratio = Math.min(
+      canvas.width / filterBaseImage.width,
+      canvas.height / filterBaseImage.height
+    );
+    const drawWidth = Math.max(1, Math.round(filterBaseImage.width * ratio));
+    const drawHeight = Math.max(1, Math.round(filterBaseImage.height * ratio));
+    const offsetX = Math.round((canvas.width - drawWidth) / 2);
+    const offsetY = Math.round((canvas.height - drawHeight) / 2);
+    const resizedPreviewData = resizeImageData(
+      filterPreviewData,
+      filterBaseImage.width,
+      filterBaseImage.height,
+      drawWidth,
+      drawHeight,
+      DEFAULT_INTERPOLATION_METHOD
+    );
+
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(resizedPreviewData), drawWidth, drawHeight),
+      offsetX,
+      offsetY
+    );
+  }, [filterBaseImage, filterPreviewData]);
+
+  useEffect(() => {
     if (!currentImage) {
       setChannelThumbnails({});
       return;
@@ -580,52 +813,33 @@ function App() {
       return;
     }
 
-    const context = setCanvasResolution(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
-    if (!context) {
-      return;
-    }
-
-    resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
-
     const layout = getCanvasImageLayout(
       currentImage.width,
       currentImage.height,
       viewScalePercent
     );
-    const regionX = Math.max(0, -layout.offsetX);
-    const regionY = Math.max(0, -layout.offsetY);
-    const destinationX = Math.max(0, layout.offsetX);
-    const destinationY = Math.max(0, layout.offsetY);
-    const regionWidth = Math.min(
-      layout.drawWidth - regionX,
-      CANVAS_WIDTH - destinationX
-    );
-    const regionHeight = Math.min(
-      layout.drawHeight - regionY,
-      CANVAS_HEIGHT - destinationY
-    );
-
-    if (regionWidth <= 0 || regionHeight <= 0) {
+    const canvasWidth = Math.max(CANVAS_WIDTH, layout.drawWidth);
+    const canvasHeight = Math.max(CANVAS_HEIGHT, layout.drawHeight);
+    const context = setCanvasResolution(canvas, canvasWidth, canvasHeight);
+    if (!context) {
       return;
     }
 
-    const scaledData = resizeImageDataRegion(
+    resetCanvasBackground(context, canvasWidth, canvasHeight, CANVAS_BG);
+
+    const scaledData = resizeImageData(
       visibleData,
       currentImage.width,
       currentImage.height,
       layout.drawWidth,
       layout.drawHeight,
-      regionX,
-      regionY,
-      regionWidth,
-      regionHeight,
       DEFAULT_INTERPOLATION_METHOD
     );
 
     context.putImageData(
-      new ImageData(new Uint8ClampedArray(scaledData), regionWidth, regionHeight),
-      destinationX,
-      destinationY
+      new ImageData(new Uint8ClampedArray(scaledData), layout.drawWidth, layout.drawHeight),
+      layout.offsetX,
+      layout.offsetY
     );
   }, [currentImage, visibleImageData, viewScalePercent]);
 
@@ -1066,6 +1280,128 @@ function App() {
     resizeDialogRef.current?.close();
   };
 
+  const openFilterDialog = (): void => {
+    if (!currentImage) {
+      alert("Сначала загрузите изображение");
+      return;
+    }
+
+    resetFilterDialogSettings();
+    setFilterBaseImage({
+      width: currentImage.width,
+      height: currentImage.height,
+      hasMask: currentImage.hasMask,
+      data: new Uint8ClampedArray(currentImage.data),
+    });
+    setFilterPreviewData(new Uint8ClampedArray(currentImage.data));
+    setFilterDialogOpen(true);
+    filterDialogRef.current?.showModal();
+  };
+
+  const closeFilterDialog = (): void => {
+    clearFilterDialogSession();
+  };
+
+  const handleFilterDialogClick = (
+    event: React.MouseEvent<HTMLDialogElement>
+  ): void => {
+    if (event.target === filterDialogRef.current) {
+      closeFilterDialog();
+    }
+  };
+
+  const handleFilterPresetChange = (presetId: KernelPresetId): void => {
+    const preset = getKernelPreset(presetId);
+    setFilterPreset(preset.id);
+    setFilterKernelValues([...preset.values]);
+    setFilterErrorMessage("");
+  };
+
+  const handleFilterKernelValueChange = (index: number, value: number): void => {
+    setFilterKernelValues((prev) =>
+      prev.map((kernelValue, kernelIndex) =>
+        kernelIndex === index ? value : kernelValue
+      )
+    );
+    setFilterErrorMessage("");
+  };
+
+  const handleFilterChannelChange = (
+    channel: ChannelKey,
+    checked: boolean
+  ): void => {
+    setFilterChannels((prev) => ({
+      ...prev,
+      [channel]: checked,
+    }));
+    setFilterErrorMessage("");
+  };
+
+  const handleResetFilter = (): void => {
+    resetFilterDialogSettings();
+  };
+
+  const handleApplyFilter = async (): Promise<void> => {
+    if (!currentImage || !filterBaseImage) {
+      return;
+    }
+
+    const validationMessage = getFilterKernelValidationMessage();
+    if (validationMessage) {
+      setFilterErrorMessage(validationMessage);
+      return;
+    }
+
+    abortFilterPreview();
+    setFilterProcessing(true);
+    setFilterErrorMessage("");
+
+    try {
+      const nextData =
+        filterOperation === "median3x3"
+          ? await applyMedianFilterAsync(
+              filterBaseImage.data,
+              filterBaseImage.width,
+              filterBaseImage.height,
+              {
+                channels: getSelectedFilterChannels(),
+                padding: filterPadding,
+                rowsPerChunk: 16,
+              }
+            )
+          : await applyKernelFilterAsync(
+              filterBaseImage.data,
+              filterBaseImage.width,
+              filterBaseImage.height,
+              filterKernelValues,
+              {
+                channels: getSelectedFilterChannels(),
+                padding: filterPadding,
+                rowsPerChunk: 16,
+              }
+            );
+
+      clearLevelsDialogSession();
+      setCurrentImage({
+        ...currentImage,
+        width: filterBaseImage.width,
+        height: filterBaseImage.height,
+        hasMask: filterBaseImage.hasMask,
+        data: nextData,
+      });
+      setLevelsSettingsByTarget(createDefaultLevelsSettingsMap());
+      setLevelsTarget("master");
+      setPickedPixel(null);
+      closeFilterDialog();
+    } catch (error) {
+      setFilterErrorMessage(
+        error instanceof Error ? error.message : "Не удалось применить фильтр"
+      );
+    } finally {
+      setFilterProcessing(false);
+    }
+  };
+
   const openLevelsDialog = (): void => {
     if (!currentImage) {
       alert("Сначала загрузите изображение");
@@ -1347,6 +1683,10 @@ function App() {
   const resizeUnitSuffix = resizeUnit === "percent" ? "%" : "px";
   const resizeStatusMessage = resizeValidationMessage || resizeValidation;
   const resizeTooltip = `${selectedResizeAlgorithm.description} ${selectedResizeAlgorithm.advantage}`;
+  const filterAvailableChannels: ChannelKey[] =
+    channelMode === "gray" ? ["gray"] : ["r", "g", "b"];
+  const filterValidationMessage = getFilterKernelValidationMessage();
+  const filterStatusMessage = filterErrorMessage || filterValidationMessage;
 
   return (
     <div className="App">
@@ -1764,6 +2104,166 @@ function App() {
               </button>
             </div>
           </dialog>
+          <dialog
+            ref={filterDialogRef}
+            className="Filter-dialog"
+            onClick={handleFilterDialogClick}
+            onCancel={(event) => {
+              event.preventDefault();
+              closeFilterDialog();
+            }}
+          >
+            <div className="Filter-header">
+              <h3>Фильтрация ядром</h3>
+              <button
+                className="Nav-buttons Filter-close"
+                type="button"
+                onClick={closeFilterDialog}
+              >
+                X
+              </button>
+            </div>
+
+            <div className="Filter-layout">
+              <div className="Filter-controls-column">
+                <div className="Filter-controls-row">
+                  <label>
+                    Метод
+                    <select
+                      value={filterOperation}
+                      onChange={(event) =>
+                        setFilterOperation(event.target.value as FilterOperation)
+                      }
+                    >
+                      <option value="kernel">Ядро свертки</option>
+                      <option value="median3x3">Медианный 3x3</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    Предустановка
+                    <select
+                      value={filterPreset}
+                      disabled={filterOperation !== "kernel"}
+                      onChange={(event) =>
+                        handleFilterPresetChange(event.target.value as KernelPresetId)
+                      }
+                    >
+                      {KERNEL_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Обработка края
+                    <select
+                      value={filterPadding}
+                      onChange={(event) =>
+                        setFilterPadding(event.target.value as KernelPaddingMode)
+                      }
+                    >
+                      <option value="black">Заполнение черным</option>
+                      <option value="white">Заполнение белым</option>
+                      <option value="copy">Копирование края</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="Filter-kernel-grid" aria-label="Ядро фильтра 3 на 3">
+                  {filterKernelValues.map((value, index) => (
+                    <input
+                      key={index}
+                      type="number"
+                      step={0.01}
+                      disabled={filterOperation !== "kernel"}
+                      value={Number.isFinite(value) ? value : ""}
+                      onChange={(event) =>
+                        handleFilterKernelValueChange(index, event.target.valueAsNumber)
+                      }
+                      aria-label={`Kernel value ${index + 1}`}
+                    />
+                  ))}
+                </div>
+
+                <fieldset className="Filter-channels">
+                  <legend>Каналы</legend>
+                  {filterAvailableChannels.map((channel) => (
+                    <label key={channel}>
+                      <input
+                        type="checkbox"
+                        checked={filterChannels[channel]}
+                        onChange={(event) =>
+                          handleFilterChannelChange(channel, event.target.checked)
+                        }
+                      />
+                      {channel === "gray" ? "Gray" : channel.toUpperCase()}
+                    </label>
+                  ))}
+                  {hasAlphaChannel && (
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={filterChannels.a}
+                        onChange={(event) =>
+                          handleFilterChannelChange("a", event.target.checked)
+                        }
+                      />
+                      A
+                    </label>
+                  )}
+                </fieldset>
+
+                {filterStatusMessage && (
+                  <p className="Filter-validation">{filterStatusMessage}</p>
+                )}
+
+                <div className="Filter-actions">
+                  <button
+                    className="Nav-buttons"
+                    type="button"
+                    onClick={handleApplyFilter}
+                    disabled={filterProcessing || Boolean(filterValidationMessage)}
+                  >
+                    Применить
+                  </button>
+                  <button
+                    className="Nav-buttons"
+                    type="button"
+                    onClick={handleResetFilter}
+                    disabled={filterProcessing}
+                  >
+                    Сбросить
+                  </button>
+                  <button className="Nav-buttons" type="button" onClick={closeFilterDialog}>
+                    Закрыть
+                  </button>
+                </div>
+              </div>
+
+              <div className="Filter-preview-column">
+                <label className="Filter-preview-toggle">
+                  <input
+                    type="checkbox"
+                    checked={filterPreviewEnabled}
+                    onChange={(event) => setFilterPreviewEnabled(event.target.checked)}
+                  />
+                  Предпросмотр
+                </label>
+                {filterProcessing && <span className="Filter-processing">Обработка...</span>}
+                <div className="Filter-preview-mini">
+                  <canvas
+                    ref={filterPreviewCanvasRef}
+                    width={320}
+                    height={220}
+                    aria-label="Миниатюра предпросмотра фильтра"
+                  />
+                </div>
+              </div>
+            </div>
+          </dialog>
 
           <section className="Future-tools">
             <div className="Tools-panel">
@@ -1784,8 +2284,8 @@ function App() {
                 <button type="button" className="Tool-tile" onClick={openResizeDialog}>
                   Масштаб
                 </button>
-                <button type="button" className="Tool-tile Tool-tile-placeholder" disabled>
-                  Скоро
+                <button type="button" className="Tool-tile" onClick={openFilterDialog}>
+                  Фильтр
                 </button>
               </div>
             </div>
