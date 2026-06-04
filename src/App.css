@@ -546,26 +546,19 @@ ul {
   border: 1px solid #5a6271;
   background: #20242d;
   color: white;
-  min-width: min(980px, 92vw);
-  max-width: 90vw;
-  padding: 12px;
+  width: min(620px, 92vw);
+  max-width: 92vw;
+  max-height: calc(100vh - 80px);
+  padding: 10px;
+  overflow: auto;
 }
 
 .Levels-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 8fr) minmax(0, 5fr);
-  grid-template-areas: "controls preview";
-  gap: 12px;
-  align-items: start;
+  display: block;
 }
 
 .Levels-controls-column {
-  grid-area: controls;
   min-width: 0;
-}
-
-.Levels-preview-column {
-  grid-area: preview;
 }
 
 .Levels-header {
@@ -573,12 +566,12 @@ ul {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .Levels-header h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
 }
 
 .Levels-close {
@@ -589,9 +582,10 @@ ul {
 
 .Levels-controls-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
+  grid-template-columns: minmax(130px, 1fr) minmax(140px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 8px;
 }
 
 .Levels-controls-row label {
@@ -605,16 +599,18 @@ ul {
   background: #282c34;
   color: #e6edf6;
   border: 1px solid #5a6271;
-  padding: 6px 8px;
+  padding: 5px 8px;
 }
 
 .Levels-preview-toggle {
   display: inline-flex;
   align-items: center;
+  flex-direction: row;
   gap: 8px;
-  margin: 0 0 10px;
+  margin: 0;
   font-size: 13px;
   color: #d7deea;
+  white-space: nowrap;
 }
 
 .Levels-preview-toggle input[type="checkbox"] {
@@ -623,24 +619,10 @@ ul {
   margin: 0;
 }
 
-.Levels-preview-mini {
-  border: 1px solid #5a6271;
-  background: #161a22;
-  margin-bottom: 10px;
-  overflow: hidden;
-  width: 100%;
-}
-
-.Levels-preview-mini canvas {
-  width: 100%;
-  height: auto;
-  max-width: none;
-}
-
 .Levels-histogram {
   border: 1px solid #5a6271;
   background: #161a22;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   overflow: hidden;
 }
 
@@ -652,8 +634,8 @@ ul {
 
 .Levels-input-markers {
   position: relative;
-  padding: 6px 0 16px;
-  margin-bottom: 10px;
+  padding: 5px 0 14px;
+  margin-bottom: 8px;
 }
 
 .Levels-markers-axis {
@@ -748,8 +730,8 @@ ul {
 .Levels-values-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .Levels-values-row label {
@@ -764,15 +746,34 @@ ul {
   background: #282c34;
   border: 1px solid #5a6271;
   color: #e6edf6;
-  padding: 6px 8px;
+  padding: 5px 8px;
   box-sizing: border-box;
 }
 
 .Levels-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.Levels-actions .Nav-buttons {
+  padding: 7px 14px;
+  font-size: 14px;
+  margin: 2px 0;
+}
+
+@media (min-width: 769px) {
+  .Levels-dialog {
+    width: min(620px, calc(100vw - 340px));
+    max-width: calc(100vw - 340px);
+  }
+
+  .Levels-dialog[open] {
+    position: fixed;
+    inset: 56px auto auto 310px;
+    margin: 0;
+  }
 }
 
 @media (max-width: 768px) {
@@ -812,18 +813,12 @@ ul {
 
   .Levels-dialog {
     min-width: 92vw;
+    width: 92vw;
+    max-width: 92vw;
   }
 
-  .Levels-layout {
+  .Levels-controls-row {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "preview"
-      "controls";
-  }
-
-  .Levels-preview-column {
-    display: flex;
-    flex-direction: column;
     align-items: stretch;
   }
 

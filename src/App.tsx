@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import "./App.css";
 import { DecodedImage, decodeGB7 } from "./formats/gb7Decoder";
 import { EncodedImage, encodeGB7 } from "./formats/gb7Encoder";
@@ -239,7 +239,6 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const levelsDialogRef = useRef<HTMLDialogElement | null>(null);
   const levelsHistogramCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const levelsPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const resizeDialogRef = useRef<HTMLDialogElement | null>(null);
   const filterDialogRef = useRef<HTMLDialogElement | null>(null);
   const filterPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -247,6 +246,8 @@ function App() {
   const panDragRef = useRef<PanDragState | null>(null);
   const viewScaleFrameRef = useRef<number | null>(null);
   const pendingViewScaleRef = useRef(100);
+  const levelsPreviewFrameRef = useRef<number | null>(null);
+  const levelsPreviewRequestRef = useRef(0);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
@@ -270,6 +271,8 @@ function App() {
   const [levelsPreviewEnabled, setLevelsPreviewEnabled] = useState(true);
   const [levelsDialogOpen, setLevelsDialogOpen] = useState(false);
   const [levelsBaseImage, setLevelsBaseImage] = useState<EncodedImage | null>(null);
+  const [levelsPreviewData, setLevelsPreviewData] =
+    useState<Uint8ClampedArray | null>(null);
   const [levelsInitialSettingsByTarget, setLevelsInitialSettingsByTarget] =
     useState<LevelsSettingsMap | null>(null);
   const [resizeUnit, setResizeUnit] = useState<ResizeUnit>("percent");
@@ -310,6 +313,14 @@ function App() {
     if (viewScaleFrameRef.current !== null) {
       cancelAnimationFrame(viewScaleFrameRef.current);
       viewScaleFrameRef.current = null;
+    }
+  };
+
+  const cancelPendingLevelsPreviewFrame = (): void => {
+    levelsPreviewRequestRef.current += 1;
+    if (levelsPreviewFrameRef.current !== null) {
+      cancelAnimationFrame(levelsPreviewFrameRef.current);
+      levelsPreviewFrameRef.current = null;
     }
   };
 
@@ -398,9 +409,11 @@ function App() {
   };
 
   const clearLevelsDialogSession = (): void => {
+    cancelPendingLevelsPreviewFrame();
     setLevelsDialogOpen(false);
     setLevelsPreviewEnabled(true);
     setLevelsBaseImage(null);
+    setLevelsPreviewData(null);
     setLevelsInitialSettingsByTarget(null);
     levelsDialogRef.current?.close();
   };
@@ -418,6 +431,7 @@ function App() {
   useEffect(() => {
     return () => {
       cancelPendingViewScaleFrame();
+      cancelPendingLevelsPreviewFrame();
     };
   }, []);
 
@@ -499,40 +513,6 @@ function App() {
 
   const selectedResizeAlgorithm = INTERPOLATION_ALGORITHMS[resizeInterpolation];
 
-  const visibleImageData = useMemo(() => {
-    if (!currentImage) {
-      return null;
-    }
-
-    return applyChannelVisibility(
-      currentImage.data,
-      channelVisibility,
-      hasAlphaChannel,
-      channelMode
-    );
-  }, [currentImage, channelVisibility, hasAlphaChannel, channelMode]);
-
-  const scaledViewCanvas = useMemo(() => {
-    if (!currentImage || !visibleImageData) {
-      return null;
-    }
-
-    const ratio = clampViewScalePercent(viewScalePercent) / 100;
-    const drawWidth = Math.max(1, Math.round(currentImage.width * ratio));
-    const drawHeight = Math.max(1, Math.round(currentImage.height * ratio));
-    const scaledData = resizeImageData(
-      visibleImageData,
-      currentImage.width,
-      currentImage.height,
-      drawWidth,
-      drawHeight,
-      DEFAULT_INTERPOLATION_METHOD
-    );
-    const canvas = createCanvasFromImageData(drawWidth, drawHeight, scaledData);
-
-    return canvas ? { canvas, drawWidth, drawHeight } : null;
-  }, [currentImage, visibleImageData, viewScalePercent]);
-
   const availableLevelsTargets = useMemo((): LevelsTarget[] => {
     const base = channelMode === "gray" ? (["master", "gray"] as LevelsTarget[]) : (["master", "r", "g", "b"] as LevelsTarget[]);
     if (hasAlphaChannel) {
@@ -556,7 +536,7 @@ function App() {
     );
   }, [activeLevelsSettings]);
 
-  const applyLevelsSettingsMapToData = (
+  const applyLevelsSettingsMapToData = useCallback((
     sourceData: Uint8ClampedArray,
     settingsMap: LevelsSettingsMap
   ): Uint8ClampedArray => {
@@ -565,7 +545,7 @@ function App() {
         ? (["master", "gray", "a"] as LevelsTarget[])
         : (["master", "r", "g", "b", "a"] as LevelsTarget[]);
 
-    let result: Uint8ClampedArray = new Uint8ClampedArray(sourceData);
+    let result: Uint8ClampedArray | null = null;
     targets.forEach((target) => {
       if (target === "a" && !hasAlphaChannel) {
         return;
@@ -574,28 +554,103 @@ function App() {
       if (isDefaultLevelsSettings(settings)) {
         return;
       }
-      result = applyLevelsToData(result, target, settings, hasAlphaChannel);
+      result = applyLevelsToData(result ?? sourceData, target, settings, hasAlphaChannel);
     });
 
-    return result;
-  };
+    return result ?? sourceData;
+  }, [channelMode, hasAlphaChannel]);
 
-  const levelsPreviewData = useMemo(() => {
-    if (!levelsDialogOpen || !levelsBaseImage) {
-      return null;
+  useEffect(() => {
+    cancelPendingLevelsPreviewFrame();
+
+    if (!levelsDialogOpen || !levelsBaseImage || !levelsPreviewEnabled) {
+      setLevelsPreviewData(null);
+      return;
     }
-    if (!levelsPreviewEnabled) {
-      return new Uint8ClampedArray(levelsBaseImage.data);
-    }
-    return applyLevelsSettingsMapToData(levelsBaseImage.data, levelsSettingsByTarget);
+
+    const requestId = levelsPreviewRequestRef.current + 1;
+    levelsPreviewRequestRef.current = requestId;
+
+    levelsPreviewFrameRef.current = requestAnimationFrame(() => {
+      levelsPreviewFrameRef.current = null;
+      const nextData = applyLevelsSettingsMapToData(
+        levelsBaseImage.data,
+        levelsSettingsByTarget
+      );
+
+      if (levelsPreviewRequestRef.current === requestId) {
+        setLevelsPreviewData(nextData);
+      }
+    });
+
+    return () => {
+      cancelPendingLevelsPreviewFrame();
+    };
   }, [
-    levelsDialogOpen,
+    applyLevelsSettingsMapToData,
     levelsBaseImage,
+    levelsDialogOpen,
     levelsPreviewEnabled,
     levelsSettingsByTarget,
-    channelMode,
-    hasAlphaChannel,
   ]);
+
+  const canvasImage = useMemo((): EncodedImage | null => {
+    if (!currentImage) {
+      return null;
+    }
+
+    if (levelsDialogOpen && levelsPreviewEnabled && levelsBaseImage && levelsPreviewData) {
+      return {
+        ...levelsBaseImage,
+        data: levelsPreviewData,
+      };
+    }
+
+    return currentImage;
+  }, [
+    currentImage,
+    levelsDialogOpen,
+    levelsPreviewEnabled,
+    levelsBaseImage,
+    levelsPreviewData,
+  ]);
+
+  const visibleImageData = useMemo(() => {
+    if (!canvasImage) {
+      return null;
+    }
+
+    return applyChannelVisibility(
+      canvasImage.data,
+      channelVisibility,
+      hasAlphaChannel,
+      channelMode
+    );
+  }, [canvasImage, channelVisibility, hasAlphaChannel, channelMode]);
+
+  const sourceViewCanvas = useMemo(() => {
+    if (!canvasImage || !visibleImageData) {
+      return null;
+    }
+
+    return createCanvasFromImageData(
+      canvasImage.width,
+      canvasImage.height,
+      visibleImageData
+    );
+  }, [canvasImage, visibleImageData]);
+
+  const scaledViewCanvas = useMemo(() => {
+    if (!canvasImage || !sourceViewCanvas) {
+      return null;
+    }
+
+    const ratio = clampViewScalePercent(viewScalePercent) / 100;
+    const drawWidth = Math.max(1, Math.round(canvasImage.width * ratio));
+    const drawHeight = Math.max(1, Math.round(canvasImage.height * ratio));
+
+    return { canvas: sourceViewCanvas, drawWidth, drawHeight };
+  }, [canvasImage, sourceViewCanvas, viewScalePercent]);
 
   const levelsHistogram = useMemo(() => {
     const histogramSource =
@@ -652,43 +707,6 @@ function App() {
       context.fillRect(x, y, Math.ceil(barWidth), barHeight);
     }
   }, [levelsHistogram, histogramScale]);
-
-  useEffect(() => {
-    const canvas = levelsPreviewCanvasRef.current;
-    if (!canvas || !levelsBaseImage || !levelsPreviewData) {
-      return;
-    }
-
-    const context = setCanvasResolution(canvas, canvas.width, canvas.height);
-    if (!context) {
-      return;
-    }
-
-    resetCanvasBackground(context, canvas.width, canvas.height, "#161a22");
-
-    const ratio = Math.min(
-      canvas.width / levelsBaseImage.width,
-      canvas.height / levelsBaseImage.height
-    );
-    const drawWidth = Math.max(1, Math.round(levelsBaseImage.width * ratio));
-    const drawHeight = Math.max(1, Math.round(levelsBaseImage.height * ratio));
-    const offsetX = Math.round((canvas.width - drawWidth) / 2);
-    const offsetY = Math.round((canvas.height - drawHeight) / 2);
-    const resizedPreviewData = resizeImageData(
-      levelsPreviewData,
-      levelsBaseImage.width,
-      levelsBaseImage.height,
-      drawWidth,
-      drawHeight,
-      DEFAULT_INTERPOLATION_METHOD
-    );
-
-    context.putImageData(
-      new ImageData(new Uint8ClampedArray(resizedPreviewData), drawWidth, drawHeight),
-      offsetX,
-      offsetY
-    );
-  }, [levelsBaseImage, levelsPreviewData]);
 
   useEffect(() => {
     if (!filterDialogOpen || !filterBaseImage) {
@@ -882,7 +900,15 @@ function App() {
       return;
     }
 
-    context.drawImage(scaledViewCanvas.canvas, layout.offsetX, layout.offsetY);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      scaledViewCanvas.canvas,
+      layout.offsetX,
+      layout.offsetY,
+      layout.drawWidth,
+      layout.drawHeight
+    );
   }, [scaledViewCanvas]);
 
   const handleUpload = (): void => {
@@ -1941,13 +1967,22 @@ function App() {
                       <option value="log">Логарифмический</option>
                     </select>
                   </label>
+
+                  <label className="Levels-preview-toggle">
+                    <input
+                      type="checkbox"
+                      checked={levelsPreviewEnabled}
+                      onChange={(event) => setLevelsPreviewEnabled(event.target.checked)}
+                    />
+                    Предпросмотр
+                  </label>
                 </div>
 
                 <div className="Levels-histogram">
                   <canvas
                     ref={levelsHistogramCanvasRef}
-                    width={512}
-                    height={180}
+                    width={480}
+                    height={140}
                     aria-label="Гистограмма уровней"
                   />
                 </div>
@@ -2052,26 +2087,6 @@ function App() {
                   <button className="Nav-buttons" type="button" onClick={handleCancelLevels}>
                     Отмена
                   </button>
-                </div>
-              </div>
-
-              <div className="Levels-preview-column">
-                <label className="Levels-preview-toggle">
-                  <input
-                    type="checkbox"
-                    checked={levelsPreviewEnabled}
-                    onChange={(event) => setLevelsPreviewEnabled(event.target.checked)}
-                  />
-                  Предпросмотр
-                </label>
-
-                <div className="Levels-preview-mini">
-                  <canvas
-                    ref={levelsPreviewCanvasRef}
-                    width={320}
-                    height={180}
-                    aria-label="Миниатюра предпросмотра уровней"
-                  />
                 </div>
               </div>
             </div>
