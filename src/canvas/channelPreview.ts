@@ -1,3 +1,5 @@
+import { resizeImageData } from "../core/imageScale";
+
 export type ChannelKey = "r" | "g" | "b" | "a" | "gray";
 export type ChannelMode = "rgb" | "gray";
 
@@ -109,20 +111,6 @@ export function createChannelThumbnail(
   channel: ChannelKey,
   thumbSize = 72
 ): string | null {
-  const sourceCanvas = document.createElement("canvas");
-  sourceCanvas.width = width;
-  sourceCanvas.height = height;
-  const sourceContext = sourceCanvas.getContext("2d");
-  if (!sourceContext) {
-    return null;
-  }
-
-  sourceContext.putImageData(
-    createChannelImageData(sourceData, width, height, channel),
-    0,
-    0
-  );
-
   const thumbCanvas = document.createElement("canvas");
   thumbCanvas.width = thumbSize;
   thumbCanvas.height = thumbSize;
@@ -139,8 +127,21 @@ export function createChannelThumbnail(
   const drawHeight = Math.max(1, Math.floor(height * ratio));
   const x = Math.floor((thumbSize - drawWidth) / 2);
   const y = Math.floor((thumbSize - drawHeight) / 2);
+  const channelImageData = createChannelImageData(sourceData, width, height, channel);
+  const resizedData = resizeImageData(
+    channelImageData.data,
+    width,
+    height,
+    drawWidth,
+    drawHeight,
+    "bilinear"
+  );
 
-  thumbContext.drawImage(sourceCanvas, x, y, drawWidth, drawHeight);
+  thumbContext.putImageData(
+    new ImageData(new Uint8ClampedArray(resizedData), drawWidth, drawHeight),
+    x,
+    y
+  );
 
   return thumbCanvas.toDataURL("image/png");
 }

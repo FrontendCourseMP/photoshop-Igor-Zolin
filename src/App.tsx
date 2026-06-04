@@ -7,7 +7,6 @@ import { LoadedImageInfo } from "./core/imageModel";
 import { detectImageColorInfo } from "./core/colorDepth";
 import {
   createCanvasFromImageData,
-  drawPreviewToWorkspace,
   resetCanvasBackground,
   setCanvasResolution,
 } from "./canvas/canvasUtils";
@@ -27,6 +26,12 @@ import {
   LevelsSettings,
   LevelsTarget,
 } from "./core/levels";
+import {
+  INTERPOLATION_ALGORITHMS,
+  InterpolationMethod,
+  resizeImageData,
+  resizeImageDataRegion,
+} from "./core/imageScale";
 
 const DEFAULT_LEVELS_SETTINGS: LevelsSettings = {
   inputBlack: 0,
@@ -34,7 +39,26 @@ const DEFAULT_LEVELS_SETTINGS: LevelsSettings = {
   gamma: 1,
 };
 
+const MIN_VIEW_SCALE_PERCENT = 12;
+const MAX_VIEW_SCALE_PERCENT = 300;
+const INITIAL_VIEW_MARGIN = 50;
+const DEFAULT_INTERPOLATION_METHOD: InterpolationMethod = "bilinear";
+const MIN_RESIZE_PERCENT = 1;
+const MAX_RESIZE_PERCENT = 1000;
+const MIN_RESIZE_DIMENSION = 1;
+const MAX_RESIZE_DIMENSION = 12000;
+const MAX_RESIZE_PIXELS = 64_000_000;
+
+type ResizeUnit = "percent" | "pixels";
+
 type LevelsSettingsMap = Record<LevelsTarget, LevelsSettings>;
+
+type CanvasImageLayout = {
+  drawWidth: number;
+  drawHeight: number;
+  offsetX: number;
+  offsetY: number;
+};
 
 const createDefaultLevelsSettingsMap = (): LevelsSettingsMap => ({
   master: { ...DEFAULT_LEVELS_SETTINGS },
@@ -53,6 +77,48 @@ const cloneLevelsSettingsMap = (source: LevelsSettingsMap): LevelsSettingsMap =>
   a: { ...source.a },
   gray: { ...source.gray },
 });
+
+const clampViewScalePercent = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return 100;
+  }
+  return Math.min(
+    MAX_VIEW_SCALE_PERCENT,
+    Math.max(MIN_VIEW_SCALE_PERCENT, Math.round(value))
+  );
+};
+
+const calculateInitialViewScalePercent = (width: number, height: number): number => {
+  if (width <= 0 || height <= 0) {
+    return 100;
+  }
+
+  const availableWidth = Math.max(1, CANVAS_WIDTH - INITIAL_VIEW_MARGIN * 2);
+  const availableHeight = Math.max(1, CANVAS_HEIGHT - INITIAL_VIEW_MARGIN * 2);
+  const fitPercent = Math.min(availableWidth / width, availableHeight / height) * 100;
+  return clampViewScalePercent(fitPercent);
+};
+
+const getCanvasImageLayout = (
+  imageWidth: number,
+  imageHeight: number,
+  scalePercent: number
+): CanvasImageLayout => {
+  const ratio = clampViewScalePercent(scalePercent) / 100;
+  const drawWidth = Math.max(1, Math.round(imageWidth * ratio));
+  const drawHeight = Math.max(1, Math.round(imageHeight * ratio));
+
+  return {
+    drawWidth,
+    drawHeight,
+    offsetX: Math.round((CANVAS_WIDTH - drawWidth) / 2),
+    offsetY: Math.round((CANVAS_HEIGHT - drawHeight) / 2),
+  };
+};
+
+const formatMegapixels = (pixels: number): string => {
+  return `${(pixels / 1_000_000).toFixed(2)} Мп`;
+};
 
 const isDefaultLevelsSettings = (settings: LevelsSettings): boolean =>
   settings.inputBlack === DEFAULT_LEVELS_SETTINGS.inputBlack &&
@@ -131,7 +197,6 @@ const normalizeLevelsSettings = (settings: LevelsSettings): LevelsSettings => {
 };
 
 function App() {
-  type CanvasViewMode = "workspace" | "native";
   type ToolKey = "none" | "eyedropper";
   type PickedPixel = {
     x: number;
@@ -149,10 +214,11 @@ function App() {
   const levelsDialogRef = useRef<HTMLDialogElement | null>(null);
   const levelsHistogramCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const levelsPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const resizeDialogRef = useRef<HTMLDialogElement | null>(null);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
   const [pendingGb7Image, setPendingGb7Image] = useState<DecodedImage | null>(null);
   const [loadedImageInfo, setLoadedImageInfo] = useState<LoadedImageInfo | null>(null);
-  const [canvasViewMode, setCanvasViewMode] = useState<CanvasViewMode>("workspace");
+  const [viewScalePercent, setViewScalePercent] = useState(100);
   const [hasAlphaChannel, setHasAlphaChannel] = useState(false);
   const [channelMode, setChannelMode] = useState<ChannelMode>("rgb");
   const [channelVisibility, setChannelVisibility] = useState<ChannelVisibility>(
@@ -173,6 +239,14 @@ function App() {
   const [levelsBaseImage, setLevelsBaseImage] = useState<EncodedImage | null>(null);
   const [levelsInitialSettingsByTarget, setLevelsInitialSettingsByTarget] =
     useState<LevelsSettingsMap | null>(null);
+  const [resizeUnit, setResizeUnit] = useState<ResizeUnit>("percent");
+  const [resizeWidthValue, setResizeWidthValue] = useState(100);
+  const [resizeHeightValue, setResizeHeightValue] = useState(100);
+  const [resizeKeepAspect, setResizeKeepAspect] = useState(true);
+  const [resizeInterpolation, setResizeInterpolation] = useState<InterpolationMethod>(
+    DEFAULT_INTERPOLATION_METHOD
+  );
+  const [resizeValidationMessage, setResizeValidationMessage] = useState("");
 
   const hasTransparentPixels = (data: Uint8ClampedArray): boolean => {
     for (let i = 3; i < data.length; i += 4) {
@@ -209,6 +283,84 @@ function App() {
     const context = setCanvasResolution(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
     resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
   }, []);
+
+  const resolveResizeTargetDimensions = (
+    unit = resizeUnit,
+    widthValue = resizeWidthValue,
+    heightValue = resizeHeightValue
+  ): { width: number; height: number } | null => {
+    if (!currentImage) {
+      return null;
+    }
+
+    if (unit === "percent") {
+      return {
+        width: Math.round((currentImage.width * widthValue) / 100),
+        height: Math.round((currentImage.height * heightValue) / 100),
+      };
+    }
+
+    return {
+      width: Math.round(widthValue),
+      height: Math.round(heightValue),
+    };
+  };
+
+  const resizeTargetDimensions = useMemo(
+    () => resolveResizeTargetDimensions(),
+    [currentImage, resizeUnit, resizeWidthValue, resizeHeightValue]
+  );
+
+  const resizeValidation = useMemo((): string => {
+    if (!currentImage || !resizeTargetDimensions) {
+      return "Сначала загрузите изображение";
+    }
+
+    const valuesAreFinite =
+      Number.isFinite(resizeWidthValue) && Number.isFinite(resizeHeightValue);
+    if (!valuesAreFinite) {
+      return "Введите числовые значения ширины и высоты";
+    }
+
+    if (resizeUnit === "percent") {
+      if (
+        resizeWidthValue < MIN_RESIZE_PERCENT ||
+        resizeWidthValue > MAX_RESIZE_PERCENT ||
+        resizeHeightValue < MIN_RESIZE_PERCENT ||
+        resizeHeightValue > MAX_RESIZE_PERCENT
+      ) {
+        return `Проценты должны быть от ${MIN_RESIZE_PERCENT} до ${MAX_RESIZE_PERCENT}`;
+      }
+    } else if (
+      resizeWidthValue < MIN_RESIZE_DIMENSION ||
+      resizeWidthValue > MAX_RESIZE_DIMENSION ||
+      resizeHeightValue < MIN_RESIZE_DIMENSION ||
+      resizeHeightValue > MAX_RESIZE_DIMENSION
+    ) {
+      return `Размер в пикселях должен быть от ${MIN_RESIZE_DIMENSION} до ${MAX_RESIZE_DIMENSION}`;
+    }
+
+    if (
+      resizeTargetDimensions.width < MIN_RESIZE_DIMENSION ||
+      resizeTargetDimensions.height < MIN_RESIZE_DIMENSION
+    ) {
+      return "Итоговый размер должен быть не меньше 1 пикселя";
+    }
+
+    if (resizeTargetDimensions.width * resizeTargetDimensions.height > MAX_RESIZE_PIXELS) {
+      return `Итоговое изображение не должно превышать ${formatMegapixels(MAX_RESIZE_PIXELS)}`;
+    }
+
+    return "";
+  }, [
+    currentImage,
+    resizeHeightValue,
+    resizeTargetDimensions,
+    resizeUnit,
+    resizeWidthValue,
+  ]);
+
+  const selectedResizeAlgorithm = INTERPOLATION_ALGORITHMS[resizeInterpolation];
 
   const visibleImageData = useMemo(() => {
     if (!currentImage) {
@@ -349,15 +501,6 @@ function App() {
       return;
     }
 
-    const sourceCanvas = createCanvasFromImageData(
-      levelsBaseImage.width,
-      levelsBaseImage.height,
-      levelsPreviewData
-    );
-    if (!sourceCanvas) {
-      return;
-    }
-
     const context = setCanvasResolution(canvas, canvas.width, canvas.height);
     if (!context) {
       return;
@@ -369,11 +512,24 @@ function App() {
       canvas.width / levelsBaseImage.width,
       canvas.height / levelsBaseImage.height
     );
-    const drawWidth = levelsBaseImage.width * ratio;
-    const drawHeight = levelsBaseImage.height * ratio;
-    const offsetX = (canvas.width - drawWidth) / 2;
-    const offsetY = (canvas.height - drawHeight) / 2;
-    context.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight);
+    const drawWidth = Math.max(1, Math.round(levelsBaseImage.width * ratio));
+    const drawHeight = Math.max(1, Math.round(levelsBaseImage.height * ratio));
+    const offsetX = Math.round((canvas.width - drawWidth) / 2);
+    const offsetY = Math.round((canvas.height - drawHeight) / 2);
+    const resizedPreviewData = resizeImageData(
+      levelsPreviewData,
+      levelsBaseImage.width,
+      levelsBaseImage.height,
+      drawWidth,
+      drawHeight,
+      DEFAULT_INTERPOLATION_METHOD
+    );
+
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(resizedPreviewData), drawWidth, drawHeight),
+      offsetX,
+      offsetY
+    );
   }, [levelsBaseImage, levelsPreviewData]);
 
   useEffect(() => {
@@ -423,40 +579,55 @@ function App() {
     if (!visibleData) {
       return;
     }
-    const sourceCanvas = createCanvasFromImageData(
-      currentImage.width,
-      currentImage.height,
-      visibleData
-    );
-    if (!sourceCanvas) {
+
+    const context = setCanvasResolution(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
+    if (!context) {
       return;
     }
 
-    if (canvasViewMode === "native") {
-      const context = setCanvasResolution(
-        canvas,
-        currentImage.width,
-        currentImage.height
-      );
-      if (!context) {
-        return;
-      }
+    resetCanvasBackground(context, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_BG);
 
-      context.clearRect(0, 0, currentImage.width, currentImage.height);
-      context.drawImage(sourceCanvas, 0, 0);
+    const layout = getCanvasImageLayout(
+      currentImage.width,
+      currentImage.height,
+      viewScalePercent
+    );
+    const regionX = Math.max(0, -layout.offsetX);
+    const regionY = Math.max(0, -layout.offsetY);
+    const destinationX = Math.max(0, layout.offsetX);
+    const destinationY = Math.max(0, layout.offsetY);
+    const regionWidth = Math.min(
+      layout.drawWidth - regionX,
+      CANVAS_WIDTH - destinationX
+    );
+    const regionHeight = Math.min(
+      layout.drawHeight - regionY,
+      CANVAS_HEIGHT - destinationY
+    );
+
+    if (regionWidth <= 0 || regionHeight <= 0) {
       return;
     }
 
-    drawPreviewToWorkspace(
-      canvas,
-      sourceCanvas,
+    const scaledData = resizeImageDataRegion(
+      visibleData,
       currentImage.width,
       currentImage.height,
-      CANVAS_WIDTH,
-      CANVAS_HEIGHT,
-      CANVAS_BG
+      layout.drawWidth,
+      layout.drawHeight,
+      regionX,
+      regionY,
+      regionWidth,
+      regionHeight,
+      DEFAULT_INTERPOLATION_METHOD
     );
-  }, [currentImage, canvasViewMode, visibleImageData]);
+
+    context.putImageData(
+      new ImageData(new Uint8ClampedArray(scaledData), regionWidth, regionHeight),
+      destinationX,
+      destinationY
+    );
+  }, [currentImage, visibleImageData, viewScalePercent]);
 
   const handleUpload = (): void => {
     fileInputRef.current?.click();
@@ -464,7 +635,6 @@ function App() {
 
   const loadGb7AsNative = (decoded: DecodedImage): void => {
     clearLevelsDialogSession();
-    setCanvasViewMode("native");
     resetChannelsForImage(decoded.hasMask, "gray");
     setLevelsSettingsByTarget(createDefaultLevelsSettingsMap());
     setLevelsTarget("master");
@@ -480,12 +650,12 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
+    setViewScalePercent(calculateInitialViewScalePercent(decoded.width, decoded.height));
     setPickedPixel(null);
   };
 
   const loadGb7AsRgba = (decoded: DecodedImage): void => {
     clearLevelsDialogSession();
-    setCanvasViewMode("workspace");
     resetChannelsForImage(decoded.hasMask, "rgb");
     setLevelsSettingsByTarget(createDefaultLevelsSettingsMap());
     setLevelsTarget("master");
@@ -501,6 +671,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.hasMask ? 32 : 24,
     });
+    setViewScalePercent(calculateInitialViewScalePercent(decoded.width, decoded.height));
     setPickedPixel(null);
   };
 
@@ -586,7 +757,6 @@ function App() {
           ? Math.max(detectedColorInfo.colorDepthBits, 32)
           : detectedColorInfo.colorDepthBits;
 
-        setCanvasViewMode("workspace");
         resetChannelsForImage(effectiveHasAlpha, "rgb");
         clearLevelsDialogSession();
         setLevelsSettingsByTarget(createDefaultLevelsSettingsMap());
@@ -603,6 +773,7 @@ function App() {
           data: originalData.data,
           hasMask: effectiveHasAlpha,
         });
+        setViewScalePercent(calculateInitialViewScalePercent(image.width, image.height));
         setPickedPixel(null);
 
         URL.revokeObjectURL(imageUrl);
@@ -697,7 +868,6 @@ function App() {
 
     const decoded = decodeGB7(buffer);
     clearLevelsDialogSession();
-    setCanvasViewMode("native");
     resetChannelsForImage(decoded.hasMask, "gray");
     setLevelsSettingsByTarget(createDefaultLevelsSettingsMap());
     setLevelsTarget("master");
@@ -713,6 +883,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
+    setViewScalePercent(calculateInitialViewScalePercent(decoded.width, decoded.height));
     setPickedPixel(null);
     URL.revokeObjectURL(url);
   };
@@ -731,6 +902,168 @@ function App() {
     if (event.target === dialogRef.current) {
       dialogRef.current?.close();
     }
+  };
+
+  const handleViewScaleChange = (value: number): void => {
+    if (!Number.isFinite(value)) {
+      return;
+    }
+    setViewScalePercent(clampViewScalePercent(value));
+  };
+
+  const openResizeDialog = (): void => {
+    if (!currentImage) {
+      alert("Сначала загрузите изображение");
+      return;
+    }
+
+    setResizeUnit("percent");
+    setResizeWidthValue(100);
+    setResizeHeightValue(100);
+    setResizeKeepAspect(true);
+    setResizeInterpolation(DEFAULT_INTERPOLATION_METHOD);
+    setResizeValidationMessage("");
+    resizeDialogRef.current?.showModal();
+  };
+
+  const closeResizeDialog = (): void => {
+    setResizeValidationMessage("");
+    resizeDialogRef.current?.close();
+  };
+
+  const handleResizeDialogClick = (event: React.MouseEvent<HTMLDialogElement>): void => {
+    if (event.target === resizeDialogRef.current) {
+      closeResizeDialog();
+    }
+  };
+
+  const syncResizeHeightToWidth = (
+    widthValue: number,
+    unit = resizeUnit
+  ): number => {
+    if (!currentImage) {
+      return widthValue;
+    }
+    if (unit === "percent") {
+      return widthValue;
+    }
+    return Math.max(
+      MIN_RESIZE_DIMENSION,
+      Math.round(widthValue * (currentImage.height / currentImage.width))
+    );
+  };
+
+  const syncResizeWidthToHeight = (
+    heightValue: number,
+    unit = resizeUnit
+  ): number => {
+    if (!currentImage) {
+      return heightValue;
+    }
+    if (unit === "percent") {
+      return heightValue;
+    }
+    return Math.max(
+      MIN_RESIZE_DIMENSION,
+      Math.round(heightValue * (currentImage.width / currentImage.height))
+    );
+  };
+
+  const handleResizeUnitChange = (unit: ResizeUnit): void => {
+    const currentTarget = resolveResizeTargetDimensions();
+
+    setResizeUnit(unit);
+    setResizeValidationMessage("");
+
+    if (!currentImage || !currentTarget) {
+      return;
+    }
+
+    if (unit === "percent") {
+      const widthPercent = (currentTarget.width / currentImage.width) * 100;
+      const heightPercent = (currentTarget.height / currentImage.height) * 100;
+      setResizeWidthValue(Math.round(widthPercent * 100) / 100);
+      setResizeHeightValue(
+        resizeKeepAspect
+          ? Math.round(widthPercent * 100) / 100
+          : Math.round(heightPercent * 100) / 100
+      );
+      return;
+    }
+
+    setResizeWidthValue(currentTarget.width);
+    setResizeHeightValue(
+      resizeKeepAspect
+        ? syncResizeHeightToWidth(currentTarget.width, unit)
+        : currentTarget.height
+    );
+  };
+
+  const handleResizeWidthChange = (value: number): void => {
+    const nextValue = Number.isFinite(value) ? value : 0;
+    setResizeWidthValue(nextValue);
+    if (resizeKeepAspect) {
+      setResizeHeightValue(syncResizeHeightToWidth(nextValue));
+    }
+    setResizeValidationMessage("");
+  };
+
+  const handleResizeHeightChange = (value: number): void => {
+    const nextValue = Number.isFinite(value) ? value : 0;
+    setResizeHeightValue(nextValue);
+    if (resizeKeepAspect) {
+      setResizeWidthValue(syncResizeWidthToHeight(nextValue));
+    }
+    setResizeValidationMessage("");
+  };
+
+  const handleResizeKeepAspectChange = (checked: boolean): void => {
+    setResizeKeepAspect(checked);
+    if (checked) {
+      setResizeHeightValue(syncResizeHeightToWidth(resizeWidthValue));
+    }
+    setResizeValidationMessage("");
+  };
+
+  const handleApplyResize = (): void => {
+    if (!currentImage || !resizeTargetDimensions) {
+      return;
+    }
+    if (resizeValidation) {
+      setResizeValidationMessage(resizeValidation);
+      return;
+    }
+
+    const nextData = resizeImageData(
+      currentImage.data,
+      currentImage.width,
+      currentImage.height,
+      resizeTargetDimensions.width,
+      resizeTargetDimensions.height,
+      resizeInterpolation
+    );
+
+    clearLevelsDialogSession();
+    setCurrentImage({
+      ...currentImage,
+      width: resizeTargetDimensions.width,
+      height: resizeTargetDimensions.height,
+      data: nextData,
+    });
+    setLoadedImageInfo((prev) =>
+      prev
+        ? {
+            ...prev,
+            width: resizeTargetDimensions.width,
+            height: resizeTargetDimensions.height,
+          }
+        : prev
+    );
+    setLevelsSettingsByTarget(createDefaultLevelsSettingsMap());
+    setLevelsTarget("master");
+    setPickedPixel(null);
+    setResizeValidationMessage("");
+    resizeDialogRef.current?.close();
   };
 
   const openLevelsDialog = (): void => {
@@ -915,35 +1248,27 @@ function App() {
     const canvasX = (event.clientX - rect.left) * (canvas.width / rect.width);
     const canvasY = (event.clientY - rect.top) * (canvas.height / rect.height);
 
-    if (canvasViewMode === "native") {
-      const x = Math.floor(canvasX);
-      const y = Math.floor(canvasY);
-      if (x < 0 || y < 0 || x >= currentImage.width || y >= currentImage.height) {
-        return null;
-      }
-      return { x, y };
-    }
-
-    const ratio = Math.min(
-      CANVAS_WIDTH / currentImage.width,
-      CANVAS_HEIGHT / currentImage.height
+    const layout = getCanvasImageLayout(
+      currentImage.width,
+      currentImage.height,
+      viewScalePercent
     );
-    const drawWidth = currentImage.width * ratio;
-    const drawHeight = currentImage.height * ratio;
-    const offsetX = (CANVAS_WIDTH - drawWidth) / 2;
-    const offsetY = (CANVAS_HEIGHT - drawHeight) / 2;
 
     if (
-      canvasX < offsetX ||
-      canvasY < offsetY ||
-      canvasX >= offsetX + drawWidth ||
-      canvasY >= offsetY + drawHeight
+      canvasX < layout.offsetX ||
+      canvasY < layout.offsetY ||
+      canvasX >= layout.offsetX + layout.drawWidth ||
+      canvasY >= layout.offsetY + layout.drawHeight
     ) {
       return null;
     }
 
-    const x = Math.floor((canvasX - offsetX) / ratio);
-    const y = Math.floor((canvasY - offsetY) / ratio);
+    const x = Math.floor(
+      ((canvasX - layout.offsetX) * currentImage.width) / layout.drawWidth
+    );
+    const y = Math.floor(
+      ((canvasY - layout.offsetY) * currentImage.height) / layout.drawHeight
+    );
 
     if (x < 0 || y < 0 || x >= currentImage.width || y >= currentImage.height) {
       return null;
@@ -1006,6 +1331,22 @@ function App() {
     }
     return "Gray";
   };
+
+  const resizeBeforePixels = currentImage ? currentImage.width * currentImage.height : 0;
+  const resizeAfterPixels =
+    resizeTargetDimensions &&
+    Number.isFinite(resizeTargetDimensions.width) &&
+    Number.isFinite(resizeTargetDimensions.height)
+      ? Math.max(0, resizeTargetDimensions.width * resizeTargetDimensions.height)
+      : 0;
+  const resizeInputMin =
+    resizeUnit === "percent" ? MIN_RESIZE_PERCENT : MIN_RESIZE_DIMENSION;
+  const resizeInputMax =
+    resizeUnit === "percent" ? MAX_RESIZE_PERCENT : MAX_RESIZE_DIMENSION;
+  const resizeInputStep = resizeUnit === "percent" ? 0.1 : 1;
+  const resizeUnitSuffix = resizeUnit === "percent" ? "%" : "px";
+  const resizeStatusMessage = resizeValidationMessage || resizeValidation;
+  const resizeTooltip = `${selectedResizeAlgorithm.description} ${selectedResizeAlgorithm.advantage}`;
 
   return (
     <div className="App">
@@ -1300,6 +1641,129 @@ function App() {
               </div>
             </div>
           </dialog>
+          <dialog
+            ref={resizeDialogRef}
+            className="Resize-dialog"
+            onClick={handleResizeDialogClick}
+            onCancel={(event) => {
+              event.preventDefault();
+              closeResizeDialog();
+            }}
+          >
+            <div className="Resize-header">
+              <h3>Изменение масштаба</h3>
+              <button
+                className="Nav-buttons Resize-close"
+                type="button"
+                onClick={closeResizeDialog}
+              >
+                X
+              </button>
+            </div>
+
+            <div className="Resize-pixels-row">
+              <span>До: {formatMegapixels(resizeBeforePixels)}</span>
+              <span>После: {formatMegapixels(resizeAfterPixels)}</span>
+            </div>
+
+            <div className="Resize-form-grid">
+              <label>
+                Единицы
+                <select
+                  value={resizeUnit}
+                  onChange={(event) =>
+                    handleResizeUnitChange(event.target.value as ResizeUnit)
+                  }
+                >
+                  <option value="percent">Проценты</option>
+                  <option value="pixels">Пиксели</option>
+                </select>
+              </label>
+
+              <label>
+                Интерполяция
+                <div className="Resize-interpolation-row">
+                  <select
+                    value={resizeInterpolation}
+                    onChange={(event) =>
+                      setResizeInterpolation(event.target.value as InterpolationMethod)
+                    }
+                  >
+                    {Object.entries(INTERPOLATION_ALGORITHMS).map(
+                      ([method, algorithm]) => (
+                        <option key={method} value={method}>
+                          {algorithm.label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                  <span
+                    className="Resize-tooltip"
+                    tabIndex={0}
+                    title={resizeTooltip}
+                    aria-label={resizeTooltip}
+                  >
+                    ?
+                  </span>
+                </div>
+              </label>
+
+              <label>
+                Ширина, {resizeUnitSuffix}
+                <input
+                  type="number"
+                  min={resizeInputMin}
+                  max={resizeInputMax}
+                  step={resizeInputStep}
+                  value={resizeWidthValue}
+                  onChange={(event) =>
+                    handleResizeWidthChange(event.target.valueAsNumber)
+                  }
+                />
+              </label>
+
+              <label>
+                Высота, {resizeUnitSuffix}
+                <input
+                  type="number"
+                  min={resizeInputMin}
+                  max={resizeInputMax}
+                  step={resizeInputStep}
+                  value={resizeHeightValue}
+                  onChange={(event) =>
+                    handleResizeHeightChange(event.target.valueAsNumber)
+                  }
+                />
+              </label>
+            </div>
+
+            <label className="Resize-aspect-row">
+              <input
+                type="checkbox"
+                checked={resizeKeepAspect}
+                onChange={(event) => handleResizeKeepAspectChange(event.target.checked)}
+              />
+              Связать ширину и высоту
+            </label>
+
+            {resizeStatusMessage && (
+              <p className="Resize-validation">{resizeStatusMessage}</p>
+            )}
+
+            <div className="Resize-actions">
+              <button
+                className="Nav-buttons"
+                type="button"
+                onClick={handleApplyResize}
+                disabled={Boolean(resizeValidation)}
+              >
+                Применить
+              </button>
+              <button className="Nav-buttons" type="button" onClick={closeResizeDialog}>
+                Отмена
+              </button>
+            </div>
+          </dialog>
 
           <section className="Future-tools">
             <div className="Tools-panel">
@@ -1317,8 +1781,8 @@ function App() {
                 <button type="button" className="Tool-tile" onClick={openLevelsDialog}>
                   Уровни
                 </button>
-                <button type="button" className="Tool-tile Tool-tile-placeholder" disabled>
-                  Скоро
+                <button type="button" className="Tool-tile" onClick={openResizeDialog}>
+                  Масштаб
                 </button>
                 <button type="button" className="Tool-tile Tool-tile-placeholder" disabled>
                   Скоро
@@ -1401,6 +1865,21 @@ function App() {
                 ? `${loadedImageInfo.width} x ${loadedImageInfo.height}`
                 : "—"}
             </span>
+            <label className="View-scale-control">
+              Масштаб:
+              <input
+                type="range"
+                min={MIN_VIEW_SCALE_PERCENT}
+                max={MAX_VIEW_SCALE_PERCENT}
+                step={1}
+                value={viewScalePercent}
+                disabled={!currentImage}
+                onChange={(event) =>
+                  handleViewScaleChange(event.target.valueAsNumber)
+                }
+              />
+              <span>{viewScalePercent}%</span>
+            </label>
             <span>
               Пипетка:{" "}
               {pickedPixel

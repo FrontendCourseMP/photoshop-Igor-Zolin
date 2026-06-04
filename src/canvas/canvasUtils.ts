@@ -27,39 +27,6 @@ export function resetCanvasBackground(
   context.fillRect(0, 0, width, height);
 }
 
-export function drawPreviewToWorkspace(
-  canvas: HTMLCanvasElement,
-  source: CanvasImageSource,
-  sourceWidth: number,
-  sourceHeight: number,
-  workspaceWidth: number,
-  workspaceHeight: number,
-  backgroundColor: string
-): void {
-  const context = setCanvasResolution(canvas, workspaceWidth, workspaceHeight);
-  if (!context) {
-    return;
-  }
-
-  resetCanvasBackground(
-    context,
-    workspaceWidth,
-    workspaceHeight,
-    backgroundColor
-  );
-
-  const ratio = Math.min(
-    workspaceWidth / sourceWidth,
-    workspaceHeight / sourceHeight
-  );
-  const width = sourceWidth * ratio;
-  const height = sourceHeight * ratio;
-  const x = (workspaceWidth - width) / 2;
-  const y = (workspaceHeight - height) / 2;
-
-  context.drawImage(source, x, y, width, height);
-}
-
 export function createCanvasFromImageData(
   width: number,
   height: number,

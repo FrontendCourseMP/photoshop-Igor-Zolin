@@ -214,6 +214,17 @@ canvas.eyedropper-active {
   gap: 20px;
 }
 
+.View-scale-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 230px;
+}
+
+.View-scale-control input[type="range"] {
+  width: 120px;
+}
+
 ul {
   list-style-type: none;
   padding-left: 0;
@@ -242,6 +253,12 @@ ul {
   background-color: #394150;
 }
 
+.Nav-buttons:disabled {
+  color: #8d97a6;
+  cursor: not-allowed;
+  background-color: #242933;
+}
+
 .HiddenInput {
   display: none;
 }
@@ -266,6 +283,114 @@ ul {
 
 .Export-dialog p {
   margin: 0 0 8px;
+}
+
+.Resize-dialog {
+  border: 1px solid #5a6271;
+  background: #20242d;
+  color: white;
+  width: min(560px, 92vw);
+  padding: 12px;
+}
+
+.Resize-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.Resize-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.Resize-close {
+  margin: 0;
+  padding: 4px 10px;
+  font-size: 14px;
+}
+
+.Resize-pixels-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: #d7deea;
+  font-size: 13px;
+}
+
+.Resize-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.Resize-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.Resize-form-grid select,
+.Resize-form-grid input[type="number"] {
+  width: 100%;
+  background: #282c34;
+  border: 1px solid #5a6271;
+  color: #e6edf6;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+
+.Resize-interpolation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  gap: 6px;
+  align-items: center;
+}
+
+.Resize-tooltip {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #5a6271;
+  background: #282c34;
+  color: #d7deea;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  cursor: help;
+  box-sizing: border-box;
+}
+
+.Resize-aspect-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #d7deea;
+  font-size: 13px;
+}
+
+.Resize-aspect-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.Resize-validation {
+  margin: 0 0 10px;
+  color: #f5b6b6;
+  font-size: 13px;
+}
+
+.Resize-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .Levels-dialog {
@@ -554,6 +679,10 @@ ul {
   }
 
   .Levels-values-row {
+    grid-template-columns: 1fr;
+  }
+
+  .Resize-form-grid {
     grid-template-columns: 1fr;
   }
 }
