@@ -113,13 +113,18 @@ const clampViewScalePercent = (value: number): number => {
   );
 };
 
-const calculateInitialViewScalePercent = (width: number, height: number): number => {
+const calculateInitialViewScalePercent = (
+  width: number,
+  height: number,
+  viewportWidth = CANVAS_WIDTH,
+  viewportHeight = CANVAS_HEIGHT
+): number => {
   if (width <= 0 || height <= 0) {
     return 100;
   }
 
-  const availableWidth = Math.max(1, CANVAS_WIDTH - INITIAL_VIEW_MARGIN * 2);
-  const availableHeight = Math.max(1, CANVAS_HEIGHT - INITIAL_VIEW_MARGIN * 2);
+  const availableWidth = Math.max(1, viewportWidth - INITIAL_VIEW_MARGIN * 2);
+  const availableHeight = Math.max(1, viewportHeight - INITIAL_VIEW_MARGIN * 2);
   const fitPercent = Math.min(availableWidth / width, availableHeight / height) * 100;
   return clampViewScalePercent(fitPercent);
 };
@@ -246,6 +251,8 @@ function App() {
   const panDragRef = useRef<PanDragState | null>(null);
   const viewScaleFrameRef = useRef<number | null>(null);
   const pendingViewScaleRef = useRef(100);
+  const centerCanvasAfterRenderRef = useRef(false);
+  const centerCanvasFrameRef = useRef<number | null>(null);
   const levelsPreviewFrameRef = useRef<number | null>(null);
   const levelsPreviewRequestRef = useRef(0);
   const [currentImage, setCurrentImage] = useState<EncodedImage | null>(null);
@@ -324,11 +331,29 @@ function App() {
     }
   };
 
+  const cancelPendingCanvasCenterFrame = (): void => {
+    if (centerCanvasFrameRef.current !== null) {
+      cancelAnimationFrame(centerCanvasFrameRef.current);
+      centerCanvasFrameRef.current = null;
+    }
+  };
+
   const setViewScaleImmediately = (scalePercent: number): void => {
     const safeScale = clampViewScalePercent(scalePercent);
     cancelPendingViewScaleFrame();
     pendingViewScaleRef.current = safeScale;
     setViewScalePercent(safeScale);
+  };
+
+  const setInitialViewScaleForImage = (width: number, height: number): void => {
+    const container = canvasContainerRef.current;
+    const viewportWidth = container?.clientWidth || CANVAS_WIDTH;
+    const viewportHeight = container?.clientHeight || CANVAS_HEIGHT;
+
+    centerCanvasAfterRenderRef.current = true;
+    setViewScaleImmediately(
+      calculateInitialViewScalePercent(width, height, viewportWidth, viewportHeight)
+    );
   };
 
   const resetChannelsForImage = (
@@ -431,6 +456,7 @@ function App() {
   useEffect(() => {
     return () => {
       cancelPendingViewScaleFrame();
+      cancelPendingCanvasCenterFrame();
       cancelPendingLevelsPreviewFrame();
     };
   }, []);
@@ -909,6 +935,29 @@ function App() {
       layout.drawWidth,
       layout.drawHeight
     );
+
+    if (centerCanvasAfterRenderRef.current) {
+      centerCanvasAfterRenderRef.current = false;
+      cancelPendingCanvasCenterFrame();
+      centerCanvasFrameRef.current = requestAnimationFrame(() => {
+        centerCanvasFrameRef.current = null;
+
+        const container = canvasContainerRef.current;
+        if (!container) {
+          return;
+        }
+
+        const maxScrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+        const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        const targetScrollLeft =
+          layout.offsetX + layout.drawWidth / 2 - container.clientWidth / 2;
+        const targetScrollTop =
+          layout.offsetY + layout.drawHeight / 2 - container.clientHeight / 2;
+
+        container.scrollLeft = Math.min(maxScrollLeft, Math.max(0, targetScrollLeft));
+        container.scrollTop = Math.min(maxScrollTop, Math.max(0, targetScrollTop));
+      });
+    }
   }, [scaledViewCanvas]);
 
   const handleUpload = (): void => {
@@ -932,7 +981,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
-    setViewScaleImmediately(calculateInitialViewScalePercent(decoded.width, decoded.height));
+    setInitialViewScaleForImage(decoded.width, decoded.height);
     setPickedPixel(null);
   };
 
@@ -953,7 +1002,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.hasMask ? 32 : 24,
     });
-    setViewScaleImmediately(calculateInitialViewScalePercent(decoded.width, decoded.height));
+    setInitialViewScaleForImage(decoded.width, decoded.height);
     setPickedPixel(null);
   };
 
@@ -1055,7 +1104,7 @@ function App() {
           data: originalData.data,
           hasMask: effectiveHasAlpha,
         });
-        setViewScaleImmediately(calculateInitialViewScalePercent(image.width, image.height));
+        setInitialViewScaleForImage(image.width, image.height);
         setPickedPixel(null);
 
         URL.revokeObjectURL(imageUrl);
@@ -1165,7 +1214,7 @@ function App() {
       height: decoded.height,
       colorDepthBits: decoded.colorDepth,
     });
-    setViewScaleImmediately(calculateInitialViewScalePercent(decoded.width, decoded.height));
+    setInitialViewScaleForImage(decoded.width, decoded.height);
     setPickedPixel(null);
     URL.revokeObjectURL(url);
   };

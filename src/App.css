@@ -185,9 +185,18 @@ body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   background: #282c34;
   border: 1px solid #454c59;
   padding: 0;
+}
+
+.canvas-container::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 canvas {
