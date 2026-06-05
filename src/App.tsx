@@ -60,6 +60,7 @@ const MAX_RESIZE_PIXELS = 64_000_000;
 
 type ResizeUnit = "percent" | "pixels";
 type FilterChannelSelection = Record<ChannelKey, boolean>;
+type FilterPresetSelection = KernelPresetId | "custom";
 
 type LevelsSettingsMap = Record<LevelsTarget, LevelsSettings>;
 
@@ -93,6 +94,7 @@ const DEFAULT_FILTER_CHANNELS: FilterChannelSelection = {
   a: false,
   gray: true,
 };
+const CUSTOM_FILTER_PRESET_ID: FilterPresetSelection = "custom";
 
 const cloneLevelsSettingsMap = (source: LevelsSettingsMap): LevelsSettingsMap => ({
   master: { ...source.master },
@@ -102,6 +104,16 @@ const cloneLevelsSettingsMap = (source: LevelsSettingsMap): LevelsSettingsMap =>
   a: { ...source.a },
   gray: { ...source.gray },
 });
+
+const getFilterPresetSelection = (values: number[]): FilterPresetSelection => {
+  const matchingPreset = KERNEL_PRESETS.find(
+    (preset) =>
+      preset.values.length === values.length &&
+      preset.values.every((presetValue, index) => presetValue === values[index])
+  );
+
+  return matchingPreset?.id ?? CUSTOM_FILTER_PRESET_ID;
+};
 
 const clampViewScalePercent = (value: number): number => {
   if (!Number.isFinite(value)) {
@@ -290,7 +302,8 @@ function App() {
     DEFAULT_INTERPOLATION_METHOD
   );
   const [resizeValidationMessage, setResizeValidationMessage] = useState("");
-  const [filterPreset, setFilterPreset] = useState<KernelPresetId>("identity");
+  const [filterPreset, setFilterPreset] =
+    useState<FilterPresetSelection>("identity");
   const [filterKernelValues, setFilterKernelValues] = useState<number[]>(
     () => [...getKernelPreset("identity").values]
   );
@@ -1441,11 +1454,12 @@ function App() {
   };
 
   const handleFilterKernelValueChange = (index: number, value: number): void => {
-    setFilterKernelValues((prev) =>
-      prev.map((kernelValue, kernelIndex) =>
-        kernelIndex === index ? value : kernelValue
-      )
+    const nextValues = filterKernelValues.map((kernelValue, kernelIndex) =>
+      kernelIndex === index ? value : kernelValue
     );
+
+    setFilterKernelValues(nextValues);
+    setFilterPreset(getFilterPresetSelection(nextValues));
     setFilterErrorMessage("");
   };
 
@@ -2305,9 +2319,13 @@ function App() {
                       value={filterPreset}
                       disabled={filterOperation !== "kernel"}
                       onChange={(event) =>
+                        event.target.value !== CUSTOM_FILTER_PRESET_ID &&
                         handleFilterPresetChange(event.target.value as KernelPresetId)
                       }
                     >
+                      <option value={CUSTOM_FILTER_PRESET_ID} disabled>
+                        Пользовательская
+                      </option>
                       {KERNEL_PRESETS.map((preset) => (
                         <option key={preset.id} value={preset.id}>
                           {preset.label}
